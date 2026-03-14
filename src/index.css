@@ -1,0 +1,344 @@
+/* ── variables ───────────────────────────────────────── */
+:root {
+  --bg: #0a0a14;
+  --bg-elev: #12121f;
+  --text: #e4e4f0;
+  --muted: #7a7a9a;
+  --border: #2a2a40;
+  --accent: #6c5ce7;
+  --danger: #e05a5a;
+}
+
+/* ── reset ───────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; overflow: hidden; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── app ─────────────────────────────────────────────── */
+.app {
+  height: 100%;
+  position: relative;
+}
+
+/* ── home button ─────────────────────────────────────── */
+.home-btn {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12px;
+  transition: color 0.2s, background 0.2s;
+}
+.home-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.1); }
+
+/* ── capture bar ─────────────────────────────────────── */
+.capture-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  padding: 14px 120px;
+  background: linear-gradient(180deg, rgba(10,10,20,0.95) 60%, transparent);
+  pointer-events: none;
+}
+.capture-input {
+  pointer-events: all;
+  width: 100%;
+  max-width: 560px;
+  padding: 10px 20px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.capture-input::placeholder { color: var(--muted); }
+.capture-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.15);
+}
+
+/* ── galaxy ──────────────────────────────────────────── */
+.galaxy {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* subtle star-field */
+  background:
+    radial-gradient(1px 1px at 10% 20%, rgba(255,255,255,0.15), transparent),
+    radial-gradient(1px 1px at 30% 70%, rgba(255,255,255,0.1), transparent),
+    radial-gradient(1px 1px at 60% 15%, rgba(255,255,255,0.12), transparent),
+    radial-gradient(1px 1px at 80% 60%, rgba(255,255,255,0.08), transparent),
+    radial-gradient(1px 1px at 45% 90%, rgba(255,255,255,0.1), transparent),
+    radial-gradient(1px 1px at 90% 40%, rgba(255,255,255,0.12), transparent),
+    radial-gradient(1.5px 1.5px at 20% 50%, rgba(108,92,231,0.15), transparent),
+    radial-gradient(1.5px 1.5px at 70% 80%, rgba(162,155,254,0.1), transparent),
+    var(--bg);
+}
+
+/* ── globs ────────────────────────────────────────────── */
+.glob {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+  transition: box-shadow 0.2s, transform 0.15s;
+  opacity: 0.88;
+  animation: globAppear 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes globAppear {
+  from { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+  to { transform: translate(-50%, -50%) scale(1); opacity: 0.88; }
+}
+.glob:hover {
+  opacity: 1;
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.15);
+  transform: translate(-50%, -50%) scale(1.08);
+  z-index: 20;
+}
+.glob:active { cursor: grabbing; }
+
+.glob.flagged {
+  box-shadow: 0 0 12px rgba(255, 100, 100, 0.4);
+}
+
+.glob-text {
+  font-size: 10px;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.2;
+  padding: 4px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  color: white;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  word-break: break-word;
+  max-width: 100%;
+  pointer-events: none;
+}
+
+.glob-edit {
+  width: 80%;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 4px;
+  color: white;
+  font-size: 10px;
+  text-align: center;
+  padding: 2px 4px;
+  outline: none;
+}
+.glob-edit.inline {
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 4px;
+}
+
+.flag-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff4757;
+  box-shadow: 0 0 6px rgba(255, 71, 87, 0.6);
+}
+.flag-dot.small {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  top: auto;
+  right: auto;
+}
+
+/* ── clusters ────────────────────────────────────────── */
+.cluster {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  min-width: 180px;
+  max-width: 280px;
+  background: var(--bg-elev);
+  border: 1.5px solid;
+  border-radius: 12px;
+  padding: 0;
+  cursor: grab;
+  z-index: 15;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  animation: globAppear 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow: hidden;
+}
+.cluster:active { cursor: grabbing; }
+
+.cluster-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  gap: 6px;
+}
+.cluster-name {
+  font-size: 13px;
+  font-weight: 600;
+  cursor: text;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cluster-name-edit {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  min-width: 0;
+}
+.cluster-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.cluster-actions button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.cluster-actions button:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+.cluster-count {
+  display: block;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cluster-globs {
+  display: flex;
+  flex-direction: column;
+}
+
+.cluster-glob-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-left: 3px solid;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  gap: 6px;
+  min-height: 32px;
+}
+.cluster-glob-item:last-child { border-bottom: none; }
+.cluster-glob-item.flagged { background: rgba(255, 71, 87, 0.06); }
+
+.cluster-glob-text {
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  cursor: text;
+  line-height: 1.3;
+}
+
+.cluster-glob-actions {
+  display: flex;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+.cluster-glob-item:hover .cluster-glob-actions { opacity: 1; }
+.cluster-glob-actions button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.cluster-glob-actions button:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+
+/* ── context menu ────────────────────────────────────── */
+.ctx-menu {
+  position: fixed;
+  z-index: 300;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 150px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  animation: fadeScale 0.12s ease-out;
+}
+@keyframes fadeScale {
+  from { opacity: 0; transform: scale(0.95); }
+}
+.ctx-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 5px;
+  text-align: left;
+}
+.ctx-menu button:hover { background: rgba(255,255,255,0.06); }
+.ctx-menu button.danger { color: var(--danger); }
+.ctx-menu button.danger:hover { background: rgba(224, 90, 90, 0.1); }
+.ctx-menu hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 3px 0;
+}
+
+/* ── responsive ──────────────────────────────────────── */
+@media (max-width: 600px) {
+  .capture-bar { padding: 10px 70px 10px 70px; }
+  .capture-input { font-size: 14px; padding: 9px 16px; }
+  .glob-text { font-size: 9px; }
+}
