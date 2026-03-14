@@ -32,14 +32,10 @@ export default function App() {
     saveTimer.current = setTimeout(() => save(state), 300)
   }, [state])
 
-  // Focus input on load + refocus when clicking empty space
-  useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
+  // Focus input on load
+  useEffect(() => { inputRef.current?.focus() }, [])
 
-  const refocusInput = useCallback(() => {
-    inputRef.current?.focus()
-  }, [])
+  const refocusInput = useCallback(() => { inputRef.current?.focus() }, [])
 
   // Add a new glob
   const addGlob = useCallback((text: string) => {
@@ -60,7 +56,7 @@ export default function App() {
       clusters: prev.clusters.map(c => ({
         ...c,
         globIds: c.globIds.filter(gid => gid !== id),
-      })),
+      })).filter(c => c.globIds.length > 0),
     }))
   }, [])
 
@@ -80,6 +76,22 @@ export default function App() {
     }))
   }, [])
 
+  // Toggle todo
+  const toggleTodo = useCallback((id: string) => {
+    setState(prev => ({
+      ...prev,
+      globs: prev.globs.map(g => g.id === id ? { ...g, isTodo: !g.isTodo, done: false } : g),
+    }))
+  }, [])
+
+  // Toggle done
+  const toggleDone = useCallback((id: string) => {
+    setState(prev => ({
+      ...prev,
+      globs: prev.globs.map(g => g.id === id ? { ...g, done: !g.done } : g),
+    }))
+  }, [])
+
   // Duplicate
   const duplicateGlob = useCallback((id: string) => {
     setState(prev => {
@@ -93,6 +105,7 @@ export default function App() {
         vx: -orig.vx,
         vy: -orig.vy,
         createdAt: Date.now(),
+        blobSeed: Math.random() * 1000,
       }
       return { ...prev, globs: [...prev.globs, dupe] }
     })
@@ -106,15 +119,19 @@ export default function App() {
     }))
   }, [])
 
-  // Update glob velocity + position (from physics)
+  // Update globs (from physics)
   const updateGlobs = useCallback((updater: (globs: Glob[]) => Glob[]) => {
     setState(prev => ({ ...prev, globs: updater(prev.globs) }))
   }, [])
 
+  // Update clusters (from physics)
+  const updateState = useCallback((updater: (s: GalaxyState) => GalaxyState) => {
+    setState(updater)
+  }, [])
+
   // Create cluster from two globs dragged together
   const createCluster = useCallback((globId1: string, globId2: string, x: number, y: number) => {
-    const name = 'new cluster'
-    const cluster = makeCluster(name, x, y, [globId1, globId2])
+    const cluster = makeCluster('new cluster', x, y, [globId1, globId2])
     setState(prev => ({
       ...prev,
       globs: prev.globs.map(g =>
@@ -133,7 +150,7 @@ export default function App() {
       globs: prev.globs.map(g => g.id === globId ? { ...g, clusterId } : g),
       clusters: prev.clusters.map(c =>
         c.id === clusterId
-          ? { ...c, globIds: [...c.globIds, globId] }
+          ? { ...c, globIds: [...c.globIds, globId], lastInteraction: Date.now() }
           : c
       ),
     }))
@@ -155,7 +172,7 @@ export default function App() {
   const renameCluster = useCallback((id: string, name: string) => {
     setState(prev => ({
       ...prev,
-      clusters: prev.clusters.map(c => c.id === id ? { ...c, name } : c),
+      clusters: prev.clusters.map(c => c.id === id ? { ...c, name, lastInteraction: Date.now() } : c),
     }))
   }, [])
 
@@ -163,15 +180,15 @@ export default function App() {
   const toggleClusterCollapse = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
-      clusters: prev.clusters.map(c => c.id === id ? { ...c, collapsed: !c.collapsed } : c),
+      clusters: prev.clusters.map(c => c.id === id ? { ...c, collapsed: !c.collapsed, lastInteraction: Date.now() } : c),
     }))
   }, [])
 
-  // Delete cluster (frees all globs)
-  const deleteCluster = useCallback((id: string) => {
+  // Dissolve cluster (frees all globs)
+  const dissolveCluster = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
-      globs: prev.globs.map(g => g.id === id ? { ...g, clusterId: null } : g),
+      globs: prev.globs.map(g => g.clusterId === id ? { ...g, clusterId: null } : g),
       clusters: prev.clusters.filter(c => c.id !== id),
     }))
   }, [])
@@ -180,7 +197,23 @@ export default function App() {
   const updateClusterPos = useCallback((id: string, x: number, y: number) => {
     setState(prev => ({
       ...prev,
-      clusters: prev.clusters.map(c => c.id === id ? { ...c, x, y } : c),
+      clusters: prev.clusters.map(c => c.id === id ? { ...c, x, y, vx: 0, vy: 0, lastInteraction: Date.now() } : c),
+    }))
+  }, [])
+
+  // Touch cluster interaction timer (freeze drift)
+  const touchCluster = useCallback((id: string) => {
+    setState(prev => ({
+      ...prev,
+      clusters: prev.clusters.map(c => c.id === id ? { ...c, lastInteraction: Date.now() } : c),
+    }))
+  }, [])
+
+  // Reorder globs within a cluster
+  const reorderClusterGlobs = useCallback((clusterId: string, globIds: string[]) => {
+    setState(prev => ({
+      ...prev,
+      clusters: prev.clusters.map(c => c.id === clusterId ? { ...c, globIds, lastInteraction: Date.now() } : c),
     }))
   }, [])
 
@@ -204,6 +237,29 @@ export default function App() {
     <div className="app" onClick={refocusInput}>
       <HomeBtn />
 
+      <Galaxy
+        state={state}
+        updateGlobs={updateGlobs}
+        updateState={updateState}
+        onDelete={deleteGlob}
+        onUpdateText={updateGlobText}
+        onToggleFlag={toggleFlag}
+        onToggleTodo={toggleTodo}
+        onToggleDone={toggleDone}
+        onDuplicate={duplicateGlob}
+        onUpdatePos={updateGlobPos}
+        onCreateCluster={createCluster}
+        onAddToCluster={addToCluster}
+        onRemoveFromCluster={removeFromCluster}
+        onRenameCluster={renameCluster}
+        onToggleClusterCollapse={toggleClusterCollapse}
+        onDissolveCluster={dissolveCluster}
+        onUpdateClusterPos={updateClusterPos}
+        onTouchCluster={touchCluster}
+        onReorderClusterGlobs={reorderClusterGlobs}
+        onRecolor={recolorGlob}
+      />
+
       <div className="capture-bar">
         <input
           ref={inputRef}
@@ -215,25 +271,6 @@ export default function App() {
           autoFocus
         />
       </div>
-
-      <Galaxy
-        globs={state.globs}
-        clusters={state.clusters}
-        updateGlobs={updateGlobs}
-        onDelete={deleteGlob}
-        onUpdateText={updateGlobText}
-        onToggleFlag={toggleFlag}
-        onDuplicate={duplicateGlob}
-        onUpdatePos={updateGlobPos}
-        onCreateCluster={createCluster}
-        onAddToCluster={addToCluster}
-        onRemoveFromCluster={removeFromCluster}
-        onRenameCluster={renameCluster}
-        onToggleClusterCollapse={toggleClusterCollapse}
-        onDeleteCluster={deleteCluster}
-        onUpdateClusterPos={updateClusterPos}
-        onRecolor={recolorGlob}
-      />
     </div>
   )
 }

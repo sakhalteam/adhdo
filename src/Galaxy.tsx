@@ -1,13 +1,15 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import type { Glob, Cluster } from './types'
+import type { Glob, Cluster, GalaxyState } from './types'
 
 interface Props {
-  globs: Glob[]
-  clusters: Cluster[]
+  state: GalaxyState
   updateGlobs: (fn: (globs: Glob[]) => Glob[]) => void
+  updateState: (fn: (s: GalaxyState) => GalaxyState) => void
   onDelete: (id: string) => void
   onUpdateText: (id: string, text: string) => void
   onToggleFlag: (id: string) => void
+  onToggleTodo: (id: string) => void
+  onToggleDone: (id: string) => void
   onDuplicate: (id: string) => void
   onUpdatePos: (id: string, x: number, y: number) => void
   onCreateCluster: (id1: string, id2: string, x: number, y: number) => void
@@ -15,47 +17,59 @@ interface Props {
   onRemoveFromCluster: (globId: string) => void
   onRenameCluster: (id: string, name: string) => void
   onToggleClusterCollapse: (id: string) => void
-  onDeleteCluster: (id: string) => void
+  onDissolveCluster: (id: string) => void
   onUpdateClusterPos: (id: string, x: number, y: number) => void
+  onTouchCluster: (id: string) => void
+  onReorderClusterGlobs: (clusterId: string, globIds: string[]) => void
   onRecolor: (id: string) => void
 }
 
-const DAMPING = 0.998
+const DAMPING = 0.9995
 const BOUNCE = 0.6
 const REPEL_DIST = 90
 const REPEL_FORCE = 0.02
+const MIN_SPEED = 0.12
+const CLUSTER_IDLE_MS = 5000 // drift starts after 5s idle
+const CLUSTER_SPEED = 0.04   // much slower than globs
+const CLUSTER_DAMPING = 0.999
 
 export default function Galaxy({
-  globs, clusters, updateGlobs,
-  onDelete, onUpdateText, onToggleFlag, onDuplicate, onUpdatePos,
+  state, updateGlobs, updateState,
+  onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleDone,
+  onDuplicate, onUpdatePos,
   onCreateCluster, onAddToCluster, onRemoveFromCluster,
-  onRenameCluster, onToggleClusterCollapse, onDeleteCluster, onUpdateClusterPos,
+  onRenameCluster, onToggleClusterCollapse, onDissolveCluster,
+  onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
   onRecolor,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null)
+  const { globs, clusters } = state
   const animRef = useRef(0)
   const dragging = useRef<{ id: string; type: 'glob' | 'cluster'; offX: number; offY: number } | null>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; globId: string } | null>(null)
+  const handleDropRef = useRef<(globId: string, dropX: number, dropY: number) => void>(() => {})
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; globId: string; inCluster: boolean } | null>(null)
+  const [dissolveConfirm, setDissolveConfirm] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingClusterId, setEditingClusterId] = useState<string | null>(null)
+  const [dragReorder, setDragReorder] = useState<{ clusterId: string; globId: string; overGlobId: string | null } | null>(null)
 
-  // Physics loop — only moves free (non-clustered, non-dragged) globs
+  // Physics loop for free globs + idle cluster drift
   useEffect(() => {
     function tick() {
+      const now = Date.now()
+
+      // Update free globs
       updateGlobs(prev => {
         const w = window.innerWidth
         const h = window.innerHeight
         const dragId = dragging.current?.id
 
         return prev.map((g, i) => {
-          // Skip clustered or currently-dragged globs
           if (g.clusterId || g.id === dragId) return g
 
           let { x, y, vx, vy } = g
 
-          // Soft repulsion from other free globs
           for (let j = 0; j < prev.length; j++) {
-            if (i === j || prev[j].clusterId) continue
+            if (i === j || prev[j].clusterId || prev[j].id === dragId) continue
             const dx = x - prev[j].x
             const dy = y - prev[j].y
             const dist = Math.sqrt(dx * dx + dy * dy)
@@ -66,22 +80,65 @@ export default function Galaxy({
             }
           }
 
-          // Apply velocity
           vx *= DAMPING
           vy *= DAMPING
+
+          const speed = Math.sqrt(vx * vx + vy * vy)
+          if (speed < MIN_SPEED) {
+            const angle = Math.atan2(vy, vx) + (Math.random() - 0.5) * 1.5
+            vx = Math.cos(angle) * MIN_SPEED
+            vy = Math.sin(angle) * MIN_SPEED
+          }
+
           x += vx
           y += vy
 
-          // Bounce off walls (accounting for capture bar at top)
           const r = g.radius
-          const topBound = 70
+          const bottomBound = 70
           if (x - r < 0) { x = r; vx = Math.abs(vx) * BOUNCE }
           if (x + r > w) { x = w - r; vx = -Math.abs(vx) * BOUNCE }
-          if (y - r < topBound) { y = topBound + r; vy = Math.abs(vy) * BOUNCE }
-          if (y + r > h) { y = h - r; vy = -Math.abs(vy) * BOUNCE }
+          if (y - r < 10) { y = 10 + r; vy = Math.abs(vy) * BOUNCE }
+          if (y + r > h - bottomBound) { y = h - bottomBound - r; vy = -Math.abs(vy) * BOUNCE }
 
           return { ...g, x, y, vx, vy }
         })
+      })
+
+      // Update cluster drift
+      updateState(prev => {
+        const w = window.innerWidth
+        const h = window.innerHeight
+        const dragId = dragging.current?.id
+
+        const newClusters = prev.clusters.map(c => {
+          if (c.id === dragId) return c
+          const idle = now - c.lastInteraction
+          if (idle < CLUSTER_IDLE_MS) return c
+
+          let { x, y, vx, vy } = c
+          const speed = Math.sqrt(vx * vx + vy * vy)
+          if (speed < CLUSTER_SPEED) {
+            const angle = Math.random() * Math.PI * 2
+            vx = Math.cos(angle) * CLUSTER_SPEED
+            vy = Math.sin(angle) * CLUSTER_SPEED
+          }
+
+          vx *= CLUSTER_DAMPING
+          vy *= CLUSTER_DAMPING
+          x += vx
+          y += vy
+
+          // Bounce clusters off walls
+          if (x < 100) { x = 100; vx = Math.abs(vx) }
+          if (x > w - 100) { x = w - 100; vx = -Math.abs(vx) }
+          if (y < 60) { y = 60; vy = Math.abs(vy) }
+          if (y > h - 120) { y = h - 120; vy = -Math.abs(vy) }
+
+          return { ...c, x, y, vx, vy }
+        })
+
+        if (newClusters === prev.clusters) return prev
+        return { ...prev, clusters: newClusters }
       })
 
       animRef.current = requestAnimationFrame(tick)
@@ -89,13 +146,20 @@ export default function Galaxy({
 
     animRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(animRef.current)
-  }, [updateGlobs])
+  }, [updateGlobs, updateState])
 
   // Drag handlers
   const onPointerDown = useCallback((e: React.PointerEvent, id: string, type: 'glob' | 'cluster') => {
+    // Don't drag when interacting with inputs, buttons, or editable elements
+    const tag = (e.target as HTMLElement).tagName
+    if (tag === 'INPUT' || tag === 'BUTTON') return
+
     e.stopPropagation()
     e.preventDefault()
     setContextMenu(null)
+    setDissolveConfirm(null)
+
+    if (type === 'cluster') onTouchCluster(id)
 
     const el = e.currentTarget as HTMLElement
     const rect = el.getBoundingClientRect()
@@ -119,7 +183,7 @@ export default function Galaxy({
 
     const onUp = (ev: PointerEvent) => {
       if (dragging.current?.type === 'glob') {
-        handleDrop(dragging.current.id, ev.clientX, ev.clientY)
+        handleDropRef.current(dragging.current.id, ev.clientX, ev.clientY)
       }
       dragging.current = null
       window.removeEventListener('pointermove', onMove)
@@ -128,57 +192,92 @@ export default function Galaxy({
 
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [onUpdatePos, onUpdateClusterPos])
+  }, [onUpdatePos, onUpdateClusterPos, onTouchCluster])
 
-  // When a glob is dropped, check if it landed on another glob or cluster
-  const handleDrop = useCallback((globId: string, dropX: number, dropY: number) => {
+  // Drop handler ref (always fresh)
+  handleDropRef.current = (globId: string, _dropX: number, _dropY: number) => {
     const droppedGlob = globs.find(g => g.id === globId)
     if (!droppedGlob) return
 
-    // Check clusters first — did we drop onto a cluster?
     for (const c of clusters) {
-      const dx = dropX - c.x
-      const dy = dropY - c.y
-      if (Math.sqrt(dx * dx + dy * dy) < 80 && !droppedGlob.clusterId) {
+      const dx = droppedGlob.x - c.x
+      const dy = droppedGlob.y - c.y
+      if (Math.sqrt(dx * dx + dy * dy) < 120 && !droppedGlob.clusterId) {
         onAddToCluster(globId, c.id)
         return
       }
     }
 
-    // Check other free globs — did we drop onto another free glob?
     for (const other of globs) {
       if (other.id === globId || other.clusterId) continue
-      const dx = dropX - other.x
-      const dy = dropY - other.y
-      if (Math.sqrt(dx * dx + dy * dy) < 70) {
-        onCreateCluster(globId, other.id, (dropX + other.x) / 2, (dropY + other.y) / 2)
+      const dx = droppedGlob.x - other.x
+      const dy = droppedGlob.y - other.y
+      if (Math.sqrt(dx * dx + dy * dy) < (droppedGlob.radius + other.radius + 20)) {
+        onCreateCluster(globId, other.id, (droppedGlob.x + other.x) / 2, (droppedGlob.y + other.y) / 2)
         return
       }
     }
-  }, [globs, clusters, onAddToCluster, onCreateCluster])
+  }
 
-  // Context menu (right-click)
-  const onContextMenu = useCallback((e: React.MouseEvent, globId: string) => {
+  // Context menu
+  const onCtx = useCallback((e: React.MouseEvent, globId: string, inCluster: boolean) => {
     e.preventDefault()
     e.stopPropagation()
-    setContextMenu({ x: e.clientX, y: e.clientY, globId })
+    setContextMenu({ x: e.clientX, y: e.clientY, globId, inCluster })
+    setDissolveConfirm(null)
   }, [])
 
-  // Close context menu on click elsewhere
   useEffect(() => {
-    const close = () => setContextMenu(null)
+    const close = () => { setContextMenu(null); setDissolveConfirm(null) }
     window.addEventListener('click', close)
     return () => window.removeEventListener('click', close)
   }, [])
 
-  // Get globs belonging to a cluster
-  const clusterGlobs = (c: Cluster) => globs.filter(g => g.clusterId === c.id)
+  // Drag reorder within clusters
+  const onReorderDragStart = useCallback((clusterId: string, globId: string) => {
+    setDragReorder({ clusterId, globId, overGlobId: null })
+  }, [])
 
-  // Free-floating globs (not in any cluster)
+  const onReorderDragOver = useCallback((globId: string) => {
+    setDragReorder(prev => prev ? { ...prev, overGlobId: globId } : null)
+  }, [])
+
+  const onReorderDrop = useCallback(() => {
+    if (!dragReorder || !dragReorder.overGlobId) { setDragReorder(null); return }
+    const cluster = clusters.find(c => c.id === dragReorder.clusterId)
+    if (!cluster) { setDragReorder(null); return }
+
+    const ids = [...cluster.globIds]
+    const fromIdx = ids.indexOf(dragReorder.globId)
+    const toIdx = ids.indexOf(dragReorder.overGlobId)
+    if (fromIdx === -1 || toIdx === -1) { setDragReorder(null); return }
+
+    ids.splice(fromIdx, 1)
+    ids.splice(toIdx, 0, dragReorder.globId)
+    onReorderClusterGlobs(dragReorder.clusterId, ids)
+    setDragReorder(null)
+  }, [dragReorder, clusters, onReorderClusterGlobs])
+
   const freeGlobs = globs.filter(g => !g.clusterId)
+  const clusterGlobs = (c: Cluster) => {
+    const map = new Map(globs.map(g => [g.id, g]))
+    return c.globIds.map(id => map.get(id)).filter(Boolean) as Glob[]
+  }
 
   return (
-    <div ref={containerRef} className="galaxy">
+    <div className="galaxy">
+      {/* SVG filter for blobby shapes */}
+      <svg className="absolute w-0 h-0" aria-hidden="true">
+        <defs>
+          <filter id="goo">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
+            <feColorMatrix in="blur" type="matrix"
+              values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7" result="goo" />
+            <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+          </filter>
+        </defs>
+      </svg>
+
       {/* Free-floating globs */}
       {freeGlobs.map(g => (
         <div
@@ -190,13 +289,11 @@ export default function Galaxy({
             width: g.radius * 2,
             height: g.radius * 2,
             background: g.color,
+            animationDelay: `${-(g.blobSeed % 10)}s`,
           }}
           onPointerDown={e => onPointerDown(e, g.id, 'glob')}
-          onContextMenu={e => onContextMenu(e, g.id)}
-          onDoubleClick={(e) => {
-            e.stopPropagation()
-            setEditingId(g.id)
-          }}
+          onContextMenu={e => onCtx(e, g.id, false)}
+          onDoubleClick={(e) => { e.stopPropagation(); setEditingId(g.id) }}
         >
           {g.flagged && <span className="flag-dot" />}
           {editingId === g.id ? (
@@ -205,15 +302,9 @@ export default function Galaxy({
               defaultValue={g.text}
               autoFocus
               onClick={e => e.stopPropagation()}
-              onBlur={e => {
-                onUpdateText(g.id, e.currentTarget.value)
-                setEditingId(null)
-              }}
+              onBlur={e => { onUpdateText(g.id, e.currentTarget.value); setEditingId(null) }}
               onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  onUpdateText(g.id, e.currentTarget.value)
-                  setEditingId(null)
-                }
+                if (e.key === 'Enter') { onUpdateText(g.id, e.currentTarget.value); setEditingId(null) }
                 if (e.key === 'Escape') setEditingId(null)
               }}
             />
@@ -226,12 +317,14 @@ export default function Galaxy({
       {/* Clusters */}
       {clusters.map(c => {
         const cGlobs = clusterGlobs(c)
+        const isIdle = Date.now() - c.lastInteraction > CLUSTER_IDLE_MS
         return (
           <div
             key={c.id}
-            className={`cluster ${c.collapsed ? 'collapsed' : ''}`}
+            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isIdle ? 'drifting' : ''}`}
             style={{ left: c.x, top: c.y, borderColor: c.color }}
             onPointerDown={e => onPointerDown(e, c.id, 'cluster')}
+            onPointerEnter={() => onTouchCluster(c.id)}
           >
             <div className="cluster-header">
               {editingClusterId === c.id ? (
@@ -240,21 +333,14 @@ export default function Galaxy({
                   defaultValue={c.name}
                   autoFocus
                   onClick={e => e.stopPropagation()}
-                  onBlur={e => {
-                    onRenameCluster(c.id, e.currentTarget.value)
-                    setEditingClusterId(null)
-                  }}
+                  onBlur={e => { onRenameCluster(c.id, e.currentTarget.value); setEditingClusterId(null) }}
                   onKeyDown={e => {
-                    if (e.key === 'Enter') {
-                      onRenameCluster(c.id, e.currentTarget.value)
-                      setEditingClusterId(null)
-                    }
+                    if (e.key === 'Enter') { onRenameCluster(c.id, e.currentTarget.value); setEditingClusterId(null) }
                     if (e.key === 'Escape') setEditingClusterId(null)
                   }}
                 />
               ) : (
-                <span
-                  className="cluster-name"
+                <span className="cluster-name"
                   onDoubleClick={e => { e.stopPropagation(); setEditingClusterId(c.id) }}
                 >
                   {c.name}
@@ -264,9 +350,17 @@ export default function Galaxy({
                 <button onClick={e => { e.stopPropagation(); onToggleClusterCollapse(c.id) }}>
                   {c.collapsed ? '＋' : '－'}
                 </button>
-                <button onClick={e => { e.stopPropagation(); onDeleteCluster(c.id) }} title="Dissolve cluster">
-                  ✕
-                </button>
+                {dissolveConfirm === c.id ? (
+                  <div className="dissolve-confirm" onClick={e => e.stopPropagation()}>
+                    <span>release globs?</span>
+                    <button className="dissolve-yes" onClick={() => { onDissolveCluster(c.id); setDissolveConfirm(null) }}>yes</button>
+                    <button className="dissolve-no" onClick={() => setDissolveConfirm(null)}>no</button>
+                  </div>
+                ) : (
+                  <button onClick={e => { e.stopPropagation(); setDissolveConfirm(c.id) }} title="Release globs">
+                    ✕
+                  </button>
+                )}
               </div>
             </div>
 
@@ -275,47 +369,45 @@ export default function Galaxy({
                 {cGlobs.map(g => (
                   <div
                     key={g.id}
-                    className={`cluster-glob-item ${g.flagged ? 'flagged' : ''}`}
+                    className={`cluster-glob-item ${g.flagged ? 'flagged' : ''} ${g.done ? 'done' : ''} ${dragReorder?.overGlobId === g.id ? 'drag-over' : ''}`}
                     style={{ borderLeftColor: g.color }}
+                    draggable
+                    onDragStart={e => { e.stopPropagation(); onReorderDragStart(c.id, g.id) }}
+                    onDragOver={e => { e.preventDefault(); e.stopPropagation(); onReorderDragOver(g.id) }}
+                    onDrop={e => { e.preventDefault(); e.stopPropagation(); onReorderDrop() }}
+                    onDragEnd={() => setDragReorder(null)}
+                    onContextMenu={e => onCtx(e, g.id, true)}
                   >
+                    {g.isTodo && (
+                      <button
+                        className={`todo-check ${g.done ? 'checked' : ''}`}
+                        onClick={e => { e.stopPropagation(); onToggleDone(g.id) }}
+                      >
+                        {g.done ? '✓' : ''}
+                      </button>
+                    )}
+                    <div className="cluster-glob-grip" title="Drag to reorder">⠿</div>
                     {editingId === g.id ? (
                       <input
                         className="glob-edit inline"
                         defaultValue={g.text}
                         autoFocus
                         onClick={e => e.stopPropagation()}
-                        onBlur={e => {
-                          onUpdateText(g.id, e.currentTarget.value)
-                          setEditingId(null)
-                        }}
+                        onBlur={e => { onUpdateText(g.id, e.currentTarget.value); setEditingId(null) }}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            onUpdateText(g.id, e.currentTarget.value)
-                            setEditingId(null)
-                          }
+                          if (e.key === 'Enter') { onUpdateText(g.id, e.currentTarget.value); setEditingId(null) }
                           if (e.key === 'Escape') setEditingId(null)
                         }}
                       />
                     ) : (
                       <span
-                        className="cluster-glob-text"
+                        className={`cluster-glob-text ${g.done ? 'line-through opacity-50' : ''}`}
                         onDoubleClick={e => { e.stopPropagation(); setEditingId(g.id) }}
                       >
-                        {g.flagged && <span className="flag-dot small" />}
+                        {g.flagged && <span className="flag-dot-inline" />}
                         {g.text}
                       </span>
                     )}
-                    <div className="cluster-glob-actions">
-                      <button onClick={e => { e.stopPropagation(); onToggleFlag(g.id) }} title="Flag">
-                        {g.flagged ? '🚩' : '⚑'}
-                      </button>
-                      <button onClick={e => { e.stopPropagation(); onRemoveFromCluster(g.id) }} title="Pop out">
-                        ↗
-                      </button>
-                      <button onClick={e => { e.stopPropagation(); onDelete(g.id) }} title="Delete">
-                        ✕
-                      </button>
-                    </div>
                   </div>
                 ))}
               </div>
@@ -341,19 +433,25 @@ export default function Galaxy({
           <button onClick={() => { onToggleFlag(contextMenu.globId); setContextMenu(null) }}>
             🚩 Flag
           </button>
+          <button onClick={() => {
+            onToggleTodo(contextMenu.globId)
+            setContextMenu(null)
+          }}>
+            {globs.find(g => g.id === contextMenu.globId)?.isTodo ? '☑️ Remove todo' : '☐ Make todo'}
+          </button>
           <button onClick={() => { onDuplicate(contextMenu.globId); setContextMenu(null) }}>
             📋 Duplicate
           </button>
           <button onClick={() => { onRecolor(contextMenu.globId); setContextMenu(null) }}>
             🎨 Recolor
           </button>
-          {globs.find(g => g.id === contextMenu.globId)?.clusterId && (
+          {contextMenu.inCluster && (
             <button onClick={() => { onRemoveFromCluster(contextMenu.globId); setContextMenu(null) }}>
               ↗️ Pop out
             </button>
           )}
           <hr />
-          <button className="danger" onClick={() => { onDelete(contextMenu.globId); setContextMenu(null) }}>
+          <button className="ctx-danger" onClick={() => { onDelete(contextMenu.globId); setContextMenu(null) }}>
             🗑️ Delete
           </button>
         </div>

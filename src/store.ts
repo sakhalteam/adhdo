@@ -3,9 +3,9 @@ import type { GalaxyState, Glob, Cluster } from './types'
 const STORAGE_KEY = 'adhdo-galaxy'
 
 const PALETTE = [
-  '#6c5ce7', '#a29bfe', '#fd79a8', '#e17055',
-  '#00b894', '#00cec9', '#0984e3', '#fdcb6e',
-  '#e84393', '#55efc4', '#74b9ff', '#ffeaa7',
+  '#7c3aed', '#a78bfa', '#6366f1', '#818cf8',
+  '#06b6d4', '#22d3ee', '#2dd4bf', '#34d399',
+  '#8b5cf6', '#c084fc', '#67e8f9', '#a5f3fc',
 ]
 
 export function randomColor(): string {
@@ -41,8 +41,11 @@ export function makeGlob(text: string, cx: number, cy: number): Glob {
     radius: Math.min(28 + text.length * 1.5, 60),
     color: randomColor(),
     flagged: false,
+    isTodo: false,
+    done: false,
     clusterId: null,
     createdAt: Date.now(),
+    blobSeed: Math.random() * 1000,
   }
 }
 
@@ -52,8 +55,11 @@ export function makeCluster(name: string, x: number, y: number, globIds: string[
     name,
     x,
     y,
+    vx: 0,
+    vy: 0,
     color: randomColor(),
     globIds,
     collapsed: false,
+    lastInteraction: Date.now(),
   }
 }
