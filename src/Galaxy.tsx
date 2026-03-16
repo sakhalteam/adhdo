@@ -980,6 +980,8 @@ export default function Galaxy({
               <div className="help-item"><kbd>Alt</kbd>+drag a cluster to sever all connections</div>
               <div className="help-item"><span className="help-action">Shake</span> a cluster to dissolve it</div>
               <div className="help-item"><span className="help-action">Drag</span> a free glob to the trash (bottom-right)</div>
+              <div className="help-item"><span className="help-action">Drag</span> a cluster onto another to merge them</div>
+              <div className="help-item"><kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo</div>
             </div>
           </div>
         )}

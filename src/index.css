@@ -53,6 +53,46 @@ body {
   border-color: var(--border-bright);
 }
 
+/* ── undo/redo ───────────────────────────────────────── */
+.undo-redo-bar {
+  position: fixed;
+  top: 14px;
+  left: 140px;
+  z-index: 100;
+  display: flex;
+  gap: 2px;
+}
+.undo-redo-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.undo-redo-btn:first-child {
+  border-radius: 999px 0 0 999px;
+}
+.undo-redo-btn:last-child {
+  border-radius: 0 999px 999px 0;
+  border-left: none;
+}
+.undo-redo-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-bright);
+}
+.undo-redo-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 /* ── save indicator ──────────────────────────────────── */
 .save-indicator {
   position: fixed;

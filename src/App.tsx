@@ -3,6 +3,8 @@ import { load, save, makeGlob, makeCluster, makeConnection, genId, randomColor }
 import type { GalaxyState, Glob } from './types'
 import Galaxy from './Galaxy'
 
+const MAX_UNDO = 40
+
 /* ── HomeBtn ─────────────────────────────────────────── */
 
 function HomeBtn() {
@@ -22,10 +24,68 @@ function HomeBtn() {
 /* ── App ─────────────────────────────────────────────── */
 
 export default function App() {
-  const [state, setState] = useState<GalaxyState>(load)
+  const [state, setStateRaw] = useState<GalaxyState>(load)
   const inputRef = useRef<HTMLInputElement>(null)
   const lastSavedRef = useRef<string>('')
   const [showSaved, setShowSaved] = useState(false)
+
+  // Undo/redo stacks
+  const undoStack = useRef<GalaxyState[]>([])
+  const redoStack = useRef<GalaxyState[]>([])
+  const [undoLen, setUndoLen] = useState(0)
+  const [redoLen, setRedoLen] = useState(0)
+
+  // Tracked setState — snapshots before applying (for user actions)
+  const setState = useCallback((updater: GalaxyState | ((prev: GalaxyState) => GalaxyState)) => {
+    setStateRaw(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      if (next === prev) return prev
+      undoStack.current.push(prev)
+      if (undoStack.current.length > MAX_UNDO) undoStack.current.shift()
+      redoStack.current = []
+      setUndoLen(undoStack.current.length)
+      setRedoLen(0)
+      return next
+    })
+  }, [])
+
+  const undo = useCallback(() => {
+    setStateRaw(prev => {
+      const snapshot = undoStack.current.pop()
+      if (!snapshot) return prev
+      redoStack.current.push(prev)
+      setUndoLen(undoStack.current.length)
+      setRedoLen(redoStack.current.length)
+      return snapshot
+    })
+  }, [])
+
+  const redo = useCallback(() => {
+    setStateRaw(prev => {
+      const snapshot = redoStack.current.pop()
+      if (!snapshot) return prev
+      undoStack.current.push(prev)
+      setUndoLen(undoStack.current.length)
+      setRedoLen(redoStack.current.length)
+      return snapshot
+    })
+  }, [])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undo()
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault()
+        redo()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
 
   // Auto-save: check every 2s if state has actually changed from last save
   useEffect(() => {
@@ -53,7 +113,8 @@ export default function App() {
 
   const refocusInput = useCallback(() => { inputRef.current?.focus() }, [])
 
-  // Add a new glob
+  // ── Tracked actions (create undo snapshots) ──────────
+
   const addGlob = useCallback((text: string) => {
     if (!text.trim()) return
     const cx = window.innerWidth / 2
@@ -62,18 +123,16 @@ export default function App() {
       ...prev,
       globs: [...prev.globs, makeGlob(text.trim(), cx, cy)],
     }))
-  }, [])
+  }, [setState])
 
-  // Add a new glob at a specific position
   const addGlobAt = useCallback((text: string, x: number, y: number) => {
     if (!text.trim()) return
     setState(prev => ({
       ...prev,
       globs: [...prev.globs, makeGlob(text.trim(), x, y)],
     }))
-  }, [])
+  }, [setState])
 
-  // Delete a glob
   const deleteGlob = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
@@ -83,41 +142,36 @@ export default function App() {
         globIds: c.globIds.filter(gid => gid !== id),
       })).filter(c => c.globIds.length > 0),
     }))
-  }, [])
+  }, [setState])
 
-  // Update glob text
   const updateGlobText = useCallback((id: string, text: string) => {
     setState(prev => ({
       ...prev,
       globs: prev.globs.map(g => g.id === id ? { ...g, text, radius: Math.min(28 + text.length * 1.5, 60) } : g),
     }))
-  }, [])
+  }, [setState])
 
-  // Toggle flag
   const toggleFlag = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
       globs: prev.globs.map(g => g.id === id ? { ...g, flagged: !g.flagged } : g),
     }))
-  }, [])
+  }, [setState])
 
-  // Toggle todo
   const toggleTodo = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
       globs: prev.globs.map(g => g.id === id ? { ...g, isTodo: !g.isTodo, done: false } : g),
     }))
-  }, [])
+  }, [setState])
 
-  // Toggle done
   const toggleDone = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
       globs: prev.globs.map(g => g.id === id ? { ...g, done: !g.done } : g),
     }))
-  }, [])
+  }, [setState])
 
-  // Duplicate
   const duplicateGlob = useCallback((id: string) => {
     setState(prev => {
       const orig = prev.globs.find(g => g.id === id)
@@ -134,27 +188,8 @@ export default function App() {
       }
       return { ...prev, globs: [...prev.globs, dupe] }
     })
-  }, [])
+  }, [setState])
 
-  // Update glob position (after drag)
-  const updateGlobPos = useCallback((id: string, x: number, y: number) => {
-    setState(prev => ({
-      ...prev,
-      globs: prev.globs.map(g => g.id === id ? { ...g, x, y, vx: 0, vy: 0 } : g),
-    }))
-  }, [])
-
-  // Update globs (from physics)
-  const updateGlobs = useCallback((updater: (globs: Glob[]) => Glob[]) => {
-    setState(prev => ({ ...prev, globs: updater(prev.globs) }))
-  }, [])
-
-  // Update clusters (from physics)
-  const updateState = useCallback((updater: (s: GalaxyState) => GalaxyState) => {
-    setState(updater)
-  }, [])
-
-  // Create cluster from two globs dragged together
   const createCluster = useCallback((globId1: string, globId2: string, x: number, y: number) => {
     const cluster = makeCluster('new cluster', x, y, [globId1, globId2])
     setState(prev => ({
@@ -166,9 +201,8 @@ export default function App() {
       ),
       clusters: [...prev.clusters, cluster],
     }))
-  }, [])
+  }, [setState])
 
-  // Convert a single glob into its own cluster
   const convertToCluster = useCallback((globId: string) => {
     setState(prev => {
       const g = prev.globs.find(g => g.id === globId)
@@ -180,9 +214,8 @@ export default function App() {
         clusters: [...prev.clusters, cluster],
       }
     })
-  }, [])
+  }, [setState])
 
-  // Add glob to existing cluster
   const addToCluster = useCallback((globId: string, clusterId: string) => {
     setState(prev => ({
       ...prev,
@@ -193,9 +226,8 @@ export default function App() {
           : c
       ),
     }))
-  }, [])
+  }, [setState])
 
-  // Remove glob from cluster (pop it free) — keeps empty clusters alive
   const removeFromCluster = useCallback((globId: string) => {
     setState(prev => ({
       ...prev,
@@ -205,9 +237,8 @@ export default function App() {
         globIds: c.globIds.filter(id => id !== globId),
       })),
     }))
-  }, [])
+  }, [setState])
 
-  // Delete cluster (and free its globs + remove connections)
   const deleteCluster = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
@@ -215,25 +246,22 @@ export default function App() {
       clusters: prev.clusters.filter(c => c.id !== id),
       connections: prev.connections.filter(cn => cn.cluster1Id !== id && cn.cluster2Id !== id),
     }))
-  }, [])
+  }, [setState])
 
-  // Rename cluster
   const renameCluster = useCallback((id: string, name: string) => {
     setState(prev => ({
       ...prev,
       clusters: prev.clusters.map(c => c.id === id ? { ...c, name, lastInteraction: Date.now() } : c),
     }))
-  }, [])
+  }, [setState])
 
-  // Toggle cluster collapsed
   const toggleClusterCollapse = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
       clusters: prev.clusters.map(c => c.id === id ? { ...c, collapsed: !c.collapsed, lastInteraction: Date.now() } : c),
     }))
-  }, [])
+  }, [setState])
 
-  // Dissolve cluster (frees all globs)
   const dissolveCluster = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
@@ -241,44 +269,24 @@ export default function App() {
       clusters: prev.clusters.filter(c => c.id !== id),
       connections: prev.connections.filter(cn => cn.cluster1Id !== id && cn.cluster2Id !== id),
     }))
-  }, [])
+  }, [setState])
 
-  // Update cluster position
-  const updateClusterPos = useCallback((id: string, x: number, y: number) => {
-    setState(prev => ({
-      ...prev,
-      clusters: prev.clusters.map(c => c.id === id ? { ...c, x, y, vx: 0, vy: 0, lastInteraction: Date.now() } : c),
-    }))
-  }, [])
-
-  // Touch cluster interaction timer (freeze drift)
-  const touchCluster = useCallback((id: string) => {
-    setState(prev => ({
-      ...prev,
-      clusters: prev.clusters.map(c => c.id === id ? { ...c, lastInteraction: Date.now() } : c),
-    }))
-  }, [])
-
-  // Reorder globs within a cluster
   const reorderClusterGlobs = useCallback((clusterId: string, globIds: string[]) => {
     setState(prev => ({
       ...prev,
       clusters: prev.clusters.map(c => c.id === clusterId ? { ...c, globIds, lastInteraction: Date.now() } : c),
     }))
-  }, [])
+  }, [setState])
 
-  // Change glob color
   const recolorGlob = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
       globs: prev.globs.map(g => g.id === id ? { ...g, color: randomColor() } : g),
     }))
-  }, [])
+  }, [setState])
 
-  // Connect two clusters
   const connectClusters = useCallback((c1Id: string, c2Id: string) => {
     setState(prev => {
-      // Don't duplicate connections
       const exists = prev.connections.some(
         cn => (cn.cluster1Id === c1Id && cn.cluster2Id === c2Id) ||
               (cn.cluster1Id === c2Id && cn.cluster2Id === c1Id)
@@ -286,17 +294,15 @@ export default function App() {
       if (exists) return prev
       return { ...prev, connections: [...prev.connections, makeConnection(c1Id, c2Id)] }
     })
-  }, [])
+  }, [setState])
 
-  // Disconnect two clusters
   const disconnectClusters = useCallback((connectionId: string) => {
     setState(prev => ({
       ...prev,
       connections: prev.connections.filter(cn => cn.id !== connectionId),
     }))
-  }, [])
+  }, [setState])
 
-  // Merge two connected clusters into one
   const mergeClusters = useCallback((c1Id: string, c2Id: string, newName: string) => {
     setState(prev => {
       const c1 = prev.clusters.find(c => c.id === c1Id)
@@ -317,13 +323,43 @@ export default function App() {
           ...prev.clusters.filter(c => c.id !== c1Id && c.id !== c2Id),
           merged,
         ],
-        // Remove connections involving either old cluster, keep the rest
         connections: prev.connections.filter(
           cn => cn.cluster1Id !== c1Id && cn.cluster1Id !== c2Id &&
                 cn.cluster2Id !== c1Id && cn.cluster2Id !== c2Id
         ),
       }
     })
+  }, [setState])
+
+  // ── Untracked updates (physics, drag position, touch) ──
+
+  const updateGlobPos = useCallback((id: string, x: number, y: number) => {
+    setStateRaw(prev => ({
+      ...prev,
+      globs: prev.globs.map(g => g.id === id ? { ...g, x, y, vx: 0, vy: 0 } : g),
+    }))
+  }, [])
+
+  const updateGlobs = useCallback((updater: (globs: Glob[]) => Glob[]) => {
+    setStateRaw(prev => ({ ...prev, globs: updater(prev.globs) }))
+  }, [])
+
+  const updateState = useCallback((updater: (s: GalaxyState) => GalaxyState) => {
+    setStateRaw(updater)
+  }, [])
+
+  const updateClusterPos = useCallback((id: string, x: number, y: number) => {
+    setStateRaw(prev => ({
+      ...prev,
+      clusters: prev.clusters.map(c => c.id === id ? { ...c, x, y, vx: 0, vy: 0, lastInteraction: Date.now() } : c),
+    }))
+  }, [])
+
+  const touchCluster = useCallback((id: string) => {
+    setStateRaw(prev => ({
+      ...prev,
+      clusters: prev.clusters.map(c => c.id === id ? { ...c, lastInteraction: Date.now() } : c),
+    }))
   }, [])
 
   // Handle input submit
@@ -337,6 +373,32 @@ export default function App() {
   return (
     <div className="app" onClick={refocusInput}>
       <HomeBtn />
+
+      {/* Undo / Redo buttons */}
+      <div className="undo-redo-bar">
+        <button
+          className="undo-redo-btn"
+          onClick={e => { e.stopPropagation(); undo() }}
+          disabled={undoLen === 0}
+          title="Undo (Ctrl+Z)"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+        </button>
+        <button
+          className="undo-redo-btn"
+          onClick={e => { e.stopPropagation(); redo() }}
+          disabled={redoLen === 0}
+          title="Redo (Ctrl+Y)"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" />
+          </svg>
+        </button>
+      </div>
 
       <Galaxy
         state={state}
