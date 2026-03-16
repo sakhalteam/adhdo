@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { load, save, makeGlob, makeCluster, genId, randomColor } from './store'
+import { load, save, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
 import type { GalaxyState, Glob } from './types'
 import Galaxy from './Galaxy'
 
@@ -45,6 +45,15 @@ export default function App() {
     setState(prev => ({
       ...prev,
       globs: [...prev.globs, makeGlob(text.trim(), cx, cy)],
+    }))
+  }, [])
+
+  // Add a new glob at a specific position
+  const addGlobAt = useCallback((text: string, x: number, y: number) => {
+    if (!text.trim()) return
+    setState(prev => ({
+      ...prev,
+      globs: [...prev.globs, makeGlob(text.trim(), x, y)],
     }))
   }, [])
 
@@ -190,6 +199,7 @@ export default function App() {
       ...prev,
       globs: prev.globs.map(g => g.clusterId === id ? { ...g, clusterId: null } : g),
       clusters: prev.clusters.filter(c => c.id !== id),
+      connections: prev.connections.filter(cn => cn.cluster1Id !== id && cn.cluster2Id !== id),
     }))
   }, [])
 
@@ -225,6 +235,57 @@ export default function App() {
     }))
   }, [])
 
+  // Connect two clusters
+  const connectClusters = useCallback((c1Id: string, c2Id: string) => {
+    setState(prev => {
+      // Don't duplicate connections
+      const exists = prev.connections.some(
+        cn => (cn.cluster1Id === c1Id && cn.cluster2Id === c2Id) ||
+              (cn.cluster1Id === c2Id && cn.cluster2Id === c1Id)
+      )
+      if (exists) return prev
+      return { ...prev, connections: [...prev.connections, makeConnection(c1Id, c2Id)] }
+    })
+  }, [])
+
+  // Disconnect two clusters
+  const disconnectClusters = useCallback((connectionId: string) => {
+    setState(prev => ({
+      ...prev,
+      connections: prev.connections.filter(cn => cn.id !== connectionId),
+    }))
+  }, [])
+
+  // Merge two connected clusters into one
+  const mergeClusters = useCallback((c1Id: string, c2Id: string, newName: string) => {
+    setState(prev => {
+      const c1 = prev.clusters.find(c => c.id === c1Id)
+      const c2 = prev.clusters.find(c => c.id === c2Id)
+      if (!c1 || !c2) return prev
+      const mergedGlobIds = [...c1.globIds, ...c2.globIds]
+      const mx = (c1.x + c2.x) / 2
+      const my = (c1.y + c2.y) / 2
+      const merged = makeCluster(newName, mx, my, mergedGlobIds)
+      return {
+        ...prev,
+        globs: prev.globs.map(g =>
+          g.clusterId === c1Id || g.clusterId === c2Id
+            ? { ...g, clusterId: merged.id }
+            : g
+        ),
+        clusters: [
+          ...prev.clusters.filter(c => c.id !== c1Id && c.id !== c2Id),
+          merged,
+        ],
+        // Remove connections involving either old cluster, keep the rest
+        connections: prev.connections.filter(
+          cn => cn.cluster1Id !== c1Id && cn.cluster1Id !== c2Id &&
+                cn.cluster2Id !== c1Id && cn.cluster2Id !== c2Id
+        ),
+      }
+    })
+  }, [])
+
   // Handle input submit
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -241,6 +302,7 @@ export default function App() {
         state={state}
         updateGlobs={updateGlobs}
         updateState={updateState}
+        onAddGlobAt={addGlobAt}
         onDelete={deleteGlob}
         onUpdateText={updateGlobText}
         onToggleFlag={toggleFlag}
@@ -258,6 +320,9 @@ export default function App() {
         onTouchCluster={touchCluster}
         onReorderClusterGlobs={reorderClusterGlobs}
         onRecolor={recolorGlob}
+        onConnectClusters={connectClusters}
+        onDisconnectClusters={disconnectClusters}
+        onMergeClusters={mergeClusters}
       />
 
       <div className="capture-bar">

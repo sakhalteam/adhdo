@@ -1,10 +1,11 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import type { Glob, Cluster, GalaxyState } from './types'
+import type { Glob, Cluster, GalaxyState, Connection } from './types'
 
 interface Props {
   state: GalaxyState
   updateGlobs: (fn: (globs: Glob[]) => Glob[]) => void
   updateState: (fn: (s: GalaxyState) => GalaxyState) => void
+  onAddGlobAt: (text: string, x: number, y: number) => void
   onDelete: (id: string) => void
   onUpdateText: (id: string, text: string) => void
   onToggleFlag: (id: string) => void
@@ -22,6 +23,9 @@ interface Props {
   onTouchCluster: (id: string) => void
   onReorderClusterGlobs: (clusterId: string, globIds: string[]) => void
   onRecolor: (id: string) => void
+  onConnectClusters: (c1Id: string, c2Id: string) => void
+  onDisconnectClusters: (connectionId: string) => void
+  onMergeClusters: (c1Id: string, c2Id: string, newName: string) => void
 }
 
 const DAMPING = 0.9995
@@ -35,22 +39,35 @@ const CLUSTER_DAMPING = 0.999
 
 export default function Galaxy({
   state, updateGlobs, updateState,
-  onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleDone,
+  onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleDone,
   onDuplicate, onUpdatePos,
   onCreateCluster, onAddToCluster, onRemoveFromCluster,
   onRenameCluster, onToggleClusterCollapse, onDissolveCluster,
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
   onRecolor,
+  onConnectClusters, onDisconnectClusters, onMergeClusters,
 }: Props) {
-  const { globs, clusters } = state
+  const { globs, clusters, connections } = state
   const animRef = useRef(0)
   const dragging = useRef<{ id: string; type: 'glob' | 'cluster'; offX: number; offY: number } | null>(null)
   const handleDropRef = useRef<(globId: string, dropX: number, dropY: number) => void>(() => {})
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; globId: string; inCluster: boolean } | null>(null)
+  const [clusterCtx, setClusterCtx] = useState<{ x: number; y: number; clusterId: string } | null>(null)
   const [dissolveConfirm, setDissolveConfirm] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingClusterId, setEditingClusterId] = useState<string | null>(null)
   const [dragReorder, setDragReorder] = useState<{ clusterId: string; globId: string; overGlobId: string | null } | null>(null)
+  const [newGlobPos, setNewGlobPos] = useState<{ x: number; y: number } | null>(null)
+  const [draggingFreeGlob, setDraggingFreeGlob] = useState(false)
+  const [trashConfirm, setTrashConfirm] = useState<string | null>(null)
+  const [shakeDissolve, setShakeDissolve] = useState<string | null>(null)
+  const [draggingClusterId, setDraggingClusterId] = useState<string | null>(null)
+  const shakeHistory = useRef<{ x: number; y: number; t: number }[]>([])
+  const [connecting, setConnecting] = useState<{ fromClusterId: string; cursorX: number; cursorY: number } | null>(null)
+  const [hoveredConnection, setHoveredConnection] = useState<string | null>(null)
+  const [mergePrompt, setMergePrompt] = useState<{ c1Id: string; c2Id: string; connectionId: string } | null>(null)
+  const TRASH_SIZE = 56
+  const TRASH_MARGIN = 24
 
   // Physics loop for free globs + idle cluster drift
   useEffect(() => {
@@ -150,18 +167,34 @@ export default function Galaxy({
 
   // Drag handlers
   const onPointerDown = useCallback((e: React.PointerEvent, id: string, type: 'glob' | 'cluster') => {
-    // Don't drag when interacting with inputs, buttons, or editable elements
-    const tag = (e.target as HTMLElement).tagName
+    // Don't drag when interacting with inputs, buttons, or draggable reorder items
+    const target = e.target as HTMLElement
+    const tag = target.tagName
     if (tag === 'INPUT' || tag === 'BUTTON') return
+    // If pointer is on a draggable item or grip handle inside a cluster, let HTML5 drag handle it
+    if (type === 'cluster' && (target.closest('.cluster-glob-grip') || target.closest('[draggable="true"]'))) return
 
     e.stopPropagation()
     e.preventDefault()
     setContextMenu(null)
+    setClusterCtx(null)
     setDissolveConfirm(null)
+    setNewGlobPos(null)
 
-    if (type === 'cluster') onTouchCluster(id)
+    if (type === 'cluster') {
+      onTouchCluster(id)
+      setDraggingClusterId(id)
+      shakeHistory.current = [{ x: e.clientX, y: e.clientY, t: Date.now() }]
+    }
+    if (type === 'glob') {
+      const g = globs.find(g => g.id === id)
+      if (g && !g.clusterId) setDraggingFreeGlob(true)
+    }
 
-    const el = e.currentTarget as HTMLElement
+    // For clusters, compute offset from the cluster element's center (not the handle)
+    const el = type === 'cluster'
+      ? (e.currentTarget as HTMLElement).closest('.cluster') as HTMLElement
+      : e.currentTarget as HTMLElement
     const rect = el.getBoundingClientRect()
     dragging.current = {
       id,
@@ -178,6 +211,34 @@ export default function Galaxy({
         onUpdatePos(dragging.current.id, nx, ny)
       } else {
         onUpdateClusterPos(dragging.current.id, nx, ny)
+
+        // Track shake history
+        const now = Date.now()
+        const hist = shakeHistory.current
+        hist.push({ x: ev.clientX, y: ev.clientY, t: now })
+        // Keep last 1.5s of history
+        while (hist.length > 0 && now - hist[0].t > 1500) hist.shift()
+
+        // Detect shake: count direction reversals in X axis
+        if (hist.length >= 6) {
+          let reversals = 0
+          for (let i = 2; i < hist.length; i++) {
+            const dx1 = hist[i - 1].x - hist[i - 2].x
+            const dx2 = hist[i].x - hist[i - 1].x
+            if (dx1 * dx2 < 0 && Math.abs(dx2) > 3) reversals++
+          }
+          if (reversals >= 5) {
+            // Shake detected — stop drag, show modal
+            dragging.current = null
+            shakeHistory.current = []
+            setDraggingFreeGlob(false)
+            setDraggingClusterId(null)
+            setShakeDissolve(id)
+            window.removeEventListener('pointermove', onMove)
+            window.removeEventListener('pointerup', onUp)
+            return
+          }
+        }
       }
     }
 
@@ -186,18 +247,33 @@ export default function Galaxy({
         handleDropRef.current(dragging.current.id, ev.clientX, ev.clientY)
       }
       dragging.current = null
+      shakeHistory.current = []
+      setDraggingFreeGlob(false)
+      setDraggingClusterId(null)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
 
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [onUpdatePos, onUpdateClusterPos, onTouchCluster])
+  }, [onUpdatePos, onUpdateClusterPos, onTouchCluster, globs])
 
   // Drop handler ref (always fresh)
-  handleDropRef.current = (globId: string, _dropX: number, _dropY: number) => {
+  handleDropRef.current = (globId: string, dropX: number, dropY: number) => {
     const droppedGlob = globs.find(g => g.id === globId)
     if (!droppedGlob) return
+
+    // Check if dropped on trash zone (bottom-right corner)
+    const w = window.innerWidth
+    const h = window.innerHeight
+    const trashCx = w - TRASH_MARGIN - TRASH_SIZE / 2
+    const trashCy = h - 80 - TRASH_SIZE / 2
+    const dx0 = dropX - trashCx
+    const dy0 = dropY - trashCy
+    if (Math.sqrt(dx0 * dx0 + dy0 * dy0) < TRASH_SIZE) {
+      setTrashConfirm(globId)
+      return
+    }
 
     for (const c of clusters) {
       const dx = droppedGlob.x - c.x
@@ -224,11 +300,12 @@ export default function Galaxy({
     e.preventDefault()
     e.stopPropagation()
     setContextMenu({ x: e.clientX, y: e.clientY, globId, inCluster })
+    setClusterCtx(null)
     setDissolveConfirm(null)
   }, [])
 
   useEffect(() => {
-    const close = () => { setContextMenu(null); setDissolveConfirm(null) }
+    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null) }
     window.addEventListener('click', close)
     return () => window.removeEventListener('click', close)
   }, [])
@@ -265,7 +342,15 @@ export default function Galaxy({
   }
 
   return (
-    <div className="galaxy">
+    <div className="galaxy" onContextMenu={e => {
+      // Only trigger on the galaxy background itself
+      if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('galaxy')) {
+        e.preventDefault()
+        setContextMenu(null)
+        setClusterCtx(null)
+        setNewGlobPos({ x: e.clientX, y: e.clientY })
+      }
+    }}>
       {/* SVG filter for blobby shapes */}
       <svg className="absolute w-0 h-0" aria-hidden="true">
         <defs>
@@ -276,6 +361,72 @@ export default function Galaxy({
             <feComposite in="SourceGraphic" in2="goo" operator="atop" />
           </filter>
         </defs>
+      </svg>
+
+      {/* Connection lines between clusters */}
+      <svg className="connection-lines" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 15 }}>
+        {connections.map(cn => {
+          const c1 = clusters.find(c => c.id === cn.cluster1Id)
+          const c2 = clusters.find(c => c.id === cn.cluster2Id)
+          if (!c1 || !c2) return null
+          const mx = (c1.x + c2.x) / 2
+          const my = (c1.y + c2.y) / 2
+          return (
+            <g key={cn.id}>
+              {/* Fat invisible line for hover hit area */}
+              <line
+                x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y}
+                stroke="transparent" strokeWidth="20"
+                style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                onPointerEnter={() => setHoveredConnection(cn.id)}
+                onPointerLeave={() => setHoveredConnection(prev => prev === cn.id ? null : prev)}
+              />
+              {/* Visible line */}
+              <line
+                x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y}
+                stroke={cn.color} strokeWidth="2" strokeDasharray="6 4"
+                opacity={hoveredConnection === cn.id ? 0.7 : 0.4}
+                style={{ transition: 'opacity 0.2s' }}
+              />
+              {/* Merge button at midpoint (on hover) */}
+              {hoveredConnection === cn.id && (
+                <foreignObject x={mx - 16} y={my - 16} width="32" height="32" style={{ pointerEvents: 'auto' }}>
+                  <div
+                    className="connection-merge-btn"
+                    title="Merge"
+                    onClick={e => {
+                      e.stopPropagation()
+                      setMergePrompt({ c1Id: cn.cluster1Id, c2Id: cn.cluster2Id, connectionId: cn.id })
+                      setHoveredConnection(null)
+                    }}
+                    onContextMenu={e => {
+                      e.preventDefault(); e.stopPropagation()
+                      onDisconnectClusters(cn.id)
+                      setHoveredConnection(null)
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+                    </svg>
+                  </div>
+                </foreignObject>
+              )}
+            </g>
+          )
+        })}
+        {/* Temporary line while connecting */}
+        {connecting && (() => {
+          const from = clusters.find(c => c.id === connecting.fromClusterId)
+          if (!from) return null
+          return (
+            <line
+              x1={from.x} y1={from.y}
+              x2={connecting.cursorX} y2={connecting.cursorY}
+              stroke="#7c3aed" strokeWidth="2" strokeDasharray="6 4"
+              opacity="0.6"
+            />
+          )
+        })()}
       </svg>
 
       {/* Free-floating globs */}
@@ -321,17 +472,71 @@ export default function Galaxy({
         return (
           <div
             key={c.id}
-            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isIdle ? 'drifting' : ''}`}
+            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isIdle ? 'drifting' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''}`}
+            data-cluster-id={c.id}
             style={{ left: c.x, top: c.y, borderColor: c.color }}
-            onPointerDown={e => onPointerDown(e, c.id, 'cluster')}
             onPointerEnter={() => onTouchCluster(c.id)}
+            onPointerDown={e => {
+              // Drag when clicking the cluster border area (within 8px of edge)
+              const rect = e.currentTarget.getBoundingClientRect()
+              const mx = e.clientX, my = e.clientY
+              const inset = 8
+              const nearEdge = mx < rect.left + inset || mx > rect.right - inset
+                || my < rect.top + inset || my > rect.bottom - inset
+              if (nearEdge) onPointerDown(e, c.id, 'cluster')
+            }}
           >
-            <div className="cluster-header">
+            <div className="cluster-drag-handle"
+              onPointerDown={e => onPointerDown(e, c.id, 'cluster')}
+              onContextMenu={e => {
+                e.preventDefault(); e.stopPropagation()
+                setClusterCtx({ x: e.clientX, y: e.clientY, clusterId: c.id })
+                setContextMenu(null)
+              }}
+            >⠿</div>
+            <div className="cluster-link-handle" title="Drag to connect"
+              onPointerDown={e => {
+                e.stopPropagation()
+                e.preventDefault()
+                setConnecting({ fromClusterId: c.id, cursorX: e.clientX, cursorY: e.clientY })
+
+                const onMove = (ev: PointerEvent) => {
+                  setConnecting(prev => prev ? { ...prev, cursorX: ev.clientX, cursorY: ev.clientY } : null)
+                }
+                const onUp = (ev: PointerEvent) => {
+                  // Check if cursor is over another cluster
+                  const el = document.elementFromPoint(ev.clientX, ev.clientY)
+                  const clusterEl = el?.closest('.cluster') as HTMLElement | null
+                  if (clusterEl) {
+                    const targetId = clusterEl.dataset.clusterId
+                    if (targetId && targetId !== c.id) {
+                      onConnectClusters(c.id, targetId)
+                    }
+                  }
+                  setConnecting(null)
+                  window.removeEventListener('pointermove', onMove)
+                  window.removeEventListener('pointerup', onUp)
+                }
+                window.addEventListener('pointermove', onMove)
+                window.addEventListener('pointerup', onUp)
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+              </svg>
+            </div>
+            <div className="cluster-header" onContextMenu={e => {
+              e.preventDefault(); e.stopPropagation()
+              setClusterCtx({ x: e.clientX, y: e.clientY, clusterId: c.id })
+              setContextMenu(null)
+            }}>
               {editingClusterId === c.id ? (
                 <input
                   className="cluster-name-edit"
                   defaultValue={c.name}
                   autoFocus
+                  onFocus={e => e.currentTarget.select()}
                   onClick={e => e.stopPropagation()}
                   onBlur={e => { onRenameCluster(c.id, e.currentTarget.value); setEditingClusterId(null) }}
                   onKeyDown={e => {
@@ -341,7 +546,7 @@ export default function Galaxy({
                 />
               ) : (
                 <span className="cluster-name"
-                  onDoubleClick={e => { e.stopPropagation(); setEditingClusterId(c.id) }}
+                  onClick={e => { e.stopPropagation(); setEditingClusterId(c.id) }}
                 >
                   {c.name}
                 </span>
@@ -375,7 +580,21 @@ export default function Galaxy({
                     onDragStart={e => { e.stopPropagation(); onReorderDragStart(c.id, g.id) }}
                     onDragOver={e => { e.preventDefault(); e.stopPropagation(); onReorderDragOver(g.id) }}
                     onDrop={e => { e.preventDefault(); e.stopPropagation(); onReorderDrop() }}
-                    onDragEnd={() => setDragReorder(null)}
+                    onDragEnd={e => {
+                      const clusterEl = (e.target as HTMLElement).closest('.cluster')
+                      if (clusterEl) {
+                        const rect = clusterEl.getBoundingClientRect()
+                        const margin = 60
+                        const { clientX: mx, clientY: my } = e
+                        if (mx < rect.left - margin || mx > rect.right + margin || my < rect.top - margin || my > rect.bottom + margin) {
+                          onRemoveFromCluster(g.id)
+                          onUpdatePos(g.id, mx, my)
+                          setDragReorder(null)
+                          return
+                        }
+                      }
+                      setDragReorder(null)
+                    }}
                     onContextMenu={e => onCtx(e, g.id, true)}
                   >
                     {g.isTodo && (
@@ -392,6 +611,7 @@ export default function Galaxy({
                         className="glob-edit inline"
                         defaultValue={g.text}
                         autoFocus
+                        onFocus={e => e.currentTarget.select()}
                         onClick={e => e.stopPropagation()}
                         onBlur={e => { onUpdateText(g.id, e.currentTarget.value); setEditingId(null) }}
                         onKeyDown={e => {
@@ -400,12 +620,14 @@ export default function Galaxy({
                         }}
                       />
                     ) : (
-                      <span
-                        className={`cluster-glob-text ${g.done ? 'line-through opacity-50' : ''}`}
-                        onDoubleClick={e => { e.stopPropagation(); setEditingId(g.id) }}
-                      >
-                        {g.flagged && <span className="flag-dot-inline" />}
-                        {g.text}
+                      <span className={`cluster-glob-text ${g.done ? 'line-through opacity-50' : ''}`}>
+                        <span
+                          className="cluster-glob-text-inner"
+                          onClick={e => { e.stopPropagation(); setEditingId(g.id) }}
+                        >
+                          {g.flagged && <span className="flag-dot-inline" />}
+                          {g.text}
+                        </span>
                       </span>
                     )}
                   </div>
@@ -420,7 +642,31 @@ export default function Galaxy({
         )
       })}
 
-      {/* Context menu */}
+      {/* Cluster context menu */}
+      {clusterCtx && (() => {
+        const c = clusters.find(cl => cl.id === clusterCtx.clusterId)
+        if (!c) return null
+        return (
+          <div
+            className="ctx-menu"
+            style={{ left: clusterCtx.x, top: clusterCtx.y }}
+            onClick={e => e.stopPropagation()}
+          >
+            <button onClick={() => { setEditingClusterId(c.id); setClusterCtx(null) }}>
+              ✏️ Rename
+            </button>
+            <button onClick={() => { onToggleClusterCollapse(c.id); setClusterCtx(null) }}>
+              {c.collapsed ? '＋ Expand' : '－ Collapse'}
+            </button>
+            <hr />
+            <button className="ctx-danger" onClick={() => { onDissolveCluster(c.id); setClusterCtx(null) }}>
+              💨 Dissolve
+            </button>
+          </div>
+        )
+      })()}
+
+      {/* Glob context menu */}
       {contextMenu && (
         <div
           className="ctx-menu"
@@ -456,6 +702,107 @@ export default function Galaxy({
           </button>
         </div>
       )}
+
+      {/* Right-click create glob */}
+      {newGlobPos && (
+        <div className="new-glob-input" style={{ left: newGlobPos.x, top: newGlobPos.y }}
+          onClick={e => e.stopPropagation()}>
+          <input
+            autoFocus
+            placeholder="new thought..."
+            onBlur={e => {
+              if (e.currentTarget.value.trim()) onAddGlobAt(e.currentTarget.value, newGlobPos.x, newGlobPos.y)
+              setNewGlobPos(null)
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                if (e.currentTarget.value.trim()) onAddGlobAt(e.currentTarget.value, newGlobPos.x, newGlobPos.y)
+                setNewGlobPos(null)
+              }
+              if (e.key === 'Escape') setNewGlobPos(null)
+            }}
+          />
+        </div>
+      )}
+
+      {/* Trash zone (visible when dragging a free glob) */}
+      <div className={`trash-zone ${draggingFreeGlob ? 'visible' : ''}`}>
+        <span className="trash-icon">🗑️</span>
+      </div>
+
+      {/* Trash confirmation toast */}
+      {trashConfirm && (
+        <div className="trash-toast" onClick={e => e.stopPropagation()}>
+          <span className="trash-toast-label">delete?</span>
+          <button className="trash-toast-btn" onClick={() => { onDelete(trashConfirm); setTrashConfirm(null) }}>
+            delete
+          </button>
+          <button className="trash-toast-cancel" onClick={() => setTrashConfirm(null)}>
+            cancel
+          </button>
+        </div>
+      )}
+
+      {/* Shake dissolve modal */}
+      {shakeDissolve && (
+        <div className="shake-modal-overlay" onClick={e => { e.stopPropagation(); setShakeDissolve(null) }}>
+          <div className="shake-modal" onClick={e => e.stopPropagation()}>
+            <p>release all globs?</p>
+            <div className="shake-modal-actions">
+              <button className="shake-modal-yes" onClick={() => { onDissolveCluster(shakeDissolve); setShakeDissolve(null) }}>
+                yes, release
+              </button>
+              <button className="shake-modal-no" onClick={() => setShakeDissolve(null)}>
+                no, keep
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Merge prompt modal */}
+      {mergePrompt && (() => {
+        const c1 = clusters.find(c => c.id === mergePrompt.c1Id)
+        const c2 = clusters.find(c => c.id === mergePrompt.c2Id)
+        if (!c1 || !c2) return null
+        return (
+          <div className="shake-modal-overlay" onClick={e => { e.stopPropagation(); setMergePrompt(null) }}>
+            <div className="shake-modal" onClick={e => e.stopPropagation()}>
+              <p>merge "{c1.name}" + "{c2.name}"</p>
+              <p className="merge-subtitle">name the merged cluster:</p>
+              <input
+                className="merge-name-input"
+                autoFocus
+                defaultValue={`${c1.name} + ${c2.name}`}
+                onFocus={e => e.currentTarget.select()}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                    onMergeClusters(mergePrompt.c1Id, mergePrompt.c2Id, e.currentTarget.value.trim())
+                    setMergePrompt(null)
+                  }
+                  if (e.key === 'Escape') setMergePrompt(null)
+                }}
+              />
+              <div className="shake-modal-actions" style={{ marginTop: 12 }}>
+                <button className="shake-modal-yes" style={{ background: 'rgba(108,92,231,0.15)', borderColor: 'rgba(108,92,231,0.3)', color: '#a78bfa' }}
+                  onClick={() => {
+                    const input = document.querySelector('.merge-name-input') as HTMLInputElement
+                    const name = input?.value.trim()
+                    if (name) {
+                      onMergeClusters(mergePrompt.c1Id, mergePrompt.c2Id, name)
+                      setMergePrompt(null)
+                    }
+                  }}>
+                  merge
+                </button>
+                <button className="shake-modal-no" onClick={() => setMergePrompt(null)}>
+                  cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

@@ -30,7 +30,15 @@ export interface Cluster {
   lastInteraction: number
 }
 
+export interface Connection {
+  id: string
+  cluster1Id: string
+  cluster2Id: string
+  color: string
+}
+
 export interface GalaxyState {
   globs: Glob[]
   clusters: Cluster[]
+  connections: Connection[]
 }

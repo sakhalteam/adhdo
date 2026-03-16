@@ -255,7 +255,7 @@ body {
   z-index: 20;
   box-shadow: 0 8px 32px rgba(0,0,0,0.3);
   animation: globAppear 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  overflow: hidden;
+  overflow: visible;
   transition: box-shadow 0.3s;
 }
 .cluster.drifting {
@@ -264,7 +264,131 @@ body {
 .cluster:hover {
   box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.08);
 }
-.cluster:active { cursor: grabbing; }
+
+
+.cluster-drag-handle {
+  position: absolute;
+  left: -6px;
+  top: 18px;
+  transform: translate(-100%, -50%) scale(0.8);
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 6px 5px;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.2s 1s, transform 0.2s 1s, background 0.15s, border-color 0.15s;
+  line-height: 1;
+  pointer-events: auto;
+  user-select: none;
+}
+.cluster-drag-handle:active { cursor: grabbing; }
+.cluster:hover .cluster-drag-handle,
+.cluster-drag-handle:hover {
+  opacity: 0.7;
+  transform: translate(-100%, -50%) scale(1);
+  transition: opacity 0.2s, transform 0.2s, background 0.15s, border-color 0.15s;
+}
+.cluster:hover .cluster-drag-handle:hover,
+.cluster-drag-handle:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-bright);
+}
+
+/* ── cluster link handle ─────────────────────────────── */
+.cluster-link-handle {
+  position: absolute;
+  right: -6px;
+  top: 18px;
+  transform: translate(100%, -50%) scale(0.8);
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 5px 5px;
+  cursor: crosshair;
+  opacity: 0;
+  transition: opacity 0.2s 1s, transform 0.2s 1s, background 0.15s, border-color 0.15s;
+  line-height: 1;
+  pointer-events: auto;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cluster-link-handle:active { cursor: grabbing; }
+.cluster:hover .cluster-link-handle,
+.cluster-link-handle:hover {
+  opacity: 0.7;
+  transform: translate(100%, -50%) scale(1);
+  transition: opacity 0.2s, transform 0.2s, background 0.15s, border-color 0.15s;
+}
+.cluster:hover .cluster-link-handle:hover,
+.cluster-link-handle:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-bright);
+}
+
+/* ── connection merge button ────────────────────────── */
+.connection-merge-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  animation: fadeScale 0.12s ease-out;
+}
+.connection-merge-btn:hover {
+  background: rgba(108, 92, 231, 0.15);
+  border-color: rgba(108, 92, 231, 0.3);
+  color: #a78bfa;
+}
+
+/* ── merge modal extras ─────────────────────────────── */
+.merge-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 10px;
+  font-weight: 400;
+}
+.merge-name-input {
+  width: 100%;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  outline: none;
+  transition: all 0.2s;
+}
+.merge-name-input:focus {
+  border-color: rgba(108, 92, 231, 0.5);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* Glow when cluster is being dragged */
+.cluster.dragging-active {
+  box-shadow: 0 0 20px rgba(108, 92, 231, 0.3), 0 0 40px rgba(108, 92, 231, 0.15), 0 8px 32px rgba(0,0,0,0.3);
+  border-color: rgba(108, 92, 231, 0.5) !important;
+}
 
 .cluster-header {
   display: flex;
@@ -352,6 +476,8 @@ body {
 .cluster-globs {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  border-radius: 0 0 13px 13px;
 }
 
 .cluster-glob-item {
@@ -389,8 +515,16 @@ body {
   flex: 1;
   min-width: 0;
   word-break: break-word;
-  cursor: text;
   line-height: 1.35;
+  user-select: none;
+}
+.cluster-glob-text-inner {
+  cursor: text;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+.cluster-glob-text-inner:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* ── todo checkbox ───────────────────────────────────── */
@@ -457,6 +591,169 @@ body {
   border-top: 1px solid var(--border);
   margin: 3px 0;
 }
+
+/* ── right-click create glob ─────────────────────────── */
+.new-glob-input {
+  position: fixed;
+  z-index: 200;
+  transform: translate(-50%, -100%) translateY(-12px);
+  animation: newGlobPop 0.12s ease-out;
+}
+@keyframes newGlobPop {
+  from { opacity: 0; transform: translate(-50%, -100%) translateY(-12px) scale(0.9); }
+  to { opacity: 1; transform: translate(-50%, -100%) translateY(-12px) scale(1); }
+}
+.new-glob-input input {
+  width: 200px;
+  padding: 8px 14px;
+  background: rgba(20, 20, 40, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-bright);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+.new-glob-input input::placeholder { color: var(--muted); }
+.new-glob-input input:focus {
+  border-color: rgba(108, 92, 231, 0.5);
+  box-shadow: 0 0 0 3px var(--ring), 0 8px 32px rgba(0,0,0,0.4);
+}
+
+/* ── trash zone ─────────────────────────────────────── */
+.trash-zone {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.1);
+  border: 2px dashed rgba(239, 68, 68, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  opacity: 0;
+  transform: scale(0.5);
+  pointer-events: none;
+  transition: opacity 0.25s, transform 0.25s;
+}
+.trash-zone.visible {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+.trash-icon { font-size: 22px; }
+
+/* ── trash toast ────────────────────────────────────── */
+.trash-toast {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  background: rgba(20, 20, 40, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  animation: fadeScale 0.15s ease-out;
+}
+.trash-toast-label {
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+}
+.trash-toast-btn {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: var(--danger);
+  padding: 4px 16px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  width: 100%;
+}
+.trash-toast-btn:hover { background: rgba(239, 68, 68, 0.25); }
+.trash-toast-cancel {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 8px;
+  transition: color 0.15s;
+}
+.trash-toast-cancel:hover { color: var(--text); }
+
+/* ── shake dissolve modal ───────────────────────────── */
+.shake-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+@keyframes fadeIn { from { opacity: 0; } }
+.shake-modal {
+  background: rgba(20, 20, 40, 0.98);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-bright);
+  border-radius: 16px;
+  padding: 28px 36px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  animation: fadeScale 0.2s ease-out;
+}
+.shake-modal p {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 18px;
+  color: var(--text);
+}
+.shake-modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.shake-modal-yes {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.shake-modal-yes:hover { background: rgba(239, 68, 68, 0.25); }
+.shake-modal-no {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.shake-modal-no:hover { background: rgba(255, 255, 255, 0.1); }
 
 /* ── responsive ──────────────────────────────────────── */
 @media (max-width: 600px) {

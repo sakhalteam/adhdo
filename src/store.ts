@@ -1,4 +1,4 @@
-import type { GalaxyState, Glob, Cluster } from './types'
+import type { GalaxyState, Glob, Cluster, Connection } from './types'
 
 const STORAGE_KEY = 'adhdo-galaxy'
 
@@ -23,9 +23,10 @@ export function save(state: GalaxyState) {
 export function load(): GalaxyState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw)
+    const parsed = JSON.parse(raw)
+    return { globs: [], clusters: [], connections: [], ...parsed }
   } catch { /* ignore corrupt data */ }
-  return { globs: [], clusters: [] }
+  return { globs: [], clusters: [], connections: [] }
 }
 
 export function makeGlob(text: string, cx: number, cy: number): Glob {
@@ -46,6 +47,15 @@ export function makeGlob(text: string, cx: number, cy: number): Glob {
     clusterId: null,
     createdAt: Date.now(),
     blobSeed: Math.random() * 1000,
+  }
+}
+
+export function makeConnection(cluster1Id: string, cluster2Id: string): Connection {
+  return {
+    id: genId(),
+    cluster1Id,
+    cluster2Id,
+    color: randomColor(),
   }
 }
 
