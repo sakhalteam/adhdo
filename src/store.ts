@@ -23,7 +23,7 @@ export function save(state: GalaxyState) {
 export function load(): GalaxyState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    const parsed = JSON.parse(raw)
+    const parsed = JSON.parse(raw!)
     return { globs: [], clusters: [], connections: [], ...parsed }
   } catch { /* ignore corrupt data */ }
   return { globs: [], clusters: [], connections: [] }

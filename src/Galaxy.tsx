@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import type { Glob, Cluster, GalaxyState, Connection } from './types'
+import type { Glob, Cluster, GalaxyState } from './types'
 
 interface Props {
   state: GalaxyState
