@@ -53,6 +53,32 @@ body {
   border-color: var(--border-bright);
 }
 
+/* ── save indicator ──────────────────────────────────── */
+.save-indicator {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+  border-radius: 999px;
+  color: #34d399;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none;
+}
+.save-indicator.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 /* ── capture bar ─────────────────────────────────────── */
 .capture-bar {
   position: fixed;
@@ -358,6 +384,20 @@ body {
   background: rgba(108, 92, 231, 0.15);
   border-color: rgba(108, 92, 231, 0.3);
   color: #a78bfa;
+}
+.connection-merge-btn.disconnect:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--danger);
+}
+
+/* Connection flash animation on successful connect */
+.connection-flash {
+  animation: connectionGlow 0.8s ease-out forwards;
+}
+@keyframes connectionGlow {
+  0% { opacity: 0.8; stroke-width: 8; }
+  100% { opacity: 0; stroke-width: 2; }
 }
 
 /* ── merge modal extras ─────────────────────────────── */
@@ -754,6 +794,99 @@ body {
   transition: all 0.15s;
 }
 .shake-modal-no:hover { background: rgba(255, 255, 255, 0.1); }
+
+/* ── empty cluster state ─────────────────────────────── */
+.cluster-empty {
+  padding: 12px 10px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  opacity: 0.6;
+}
+
+/* ── help trigger & panel ────────────────────────────── */
+.help-trigger {
+  position: fixed;
+  bottom: 80px;
+  left: 14px;
+  z-index: 100;
+}
+.help-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+.help-trigger:hover .help-icon,
+.help-trigger.open .help-icon {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-bright);
+}
+.help-panel {
+  position: absolute;
+  bottom: 36px;
+  left: 0;
+  width: 300px;
+  background: rgba(20, 20, 40, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-bright);
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+  animation: fadeScale 0.15s ease-out;
+}
+.help-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.help-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.help-item {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.4;
+  opacity: 0.8;
+}
+.help-action {
+  color: #a78bfa;
+  font-weight: 500;
+}
+.help-item kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text);
+}
+.help-mono {
+  font-family: monospace;
+  font-size: 14px;
+}
 
 /* ── responsive ──────────────────────────────────────── */
 @media (max-width: 600px) {

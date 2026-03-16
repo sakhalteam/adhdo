@@ -14,11 +14,13 @@ interface Props {
   onDuplicate: (id: string) => void
   onUpdatePos: (id: string, x: number, y: number) => void
   onCreateCluster: (id1: string, id2: string, x: number, y: number) => void
+  onConvertToCluster: (globId: string) => void
   onAddToCluster: (globId: string, clusterId: string) => void
   onRemoveFromCluster: (globId: string) => void
   onRenameCluster: (id: string, name: string) => void
   onToggleClusterCollapse: (id: string) => void
   onDissolveCluster: (id: string) => void
+  onDeleteCluster: (id: string) => void
   onUpdateClusterPos: (id: string, x: number, y: number) => void
   onTouchCluster: (id: string) => void
   onReorderClusterGlobs: (clusterId: string, globIds: string[]) => void
@@ -41,8 +43,8 @@ export default function Galaxy({
   state, updateGlobs, updateState,
   onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleDone,
   onDuplicate, onUpdatePos,
-  onCreateCluster, onAddToCluster, onRemoveFromCluster,
-  onRenameCluster, onToggleClusterCollapse, onDissolveCluster,
+  onCreateCluster, onConvertToCluster, onAddToCluster, onRemoveFromCluster,
+  onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
   onRecolor,
   onConnectClusters, onDisconnectClusters, onMergeClusters,
@@ -51,6 +53,8 @@ export default function Galaxy({
   const animRef = useRef(0)
   const dragging = useRef<{ id: string; type: 'glob' | 'cluster'; offX: number; offY: number } | null>(null)
   const handleDropRef = useRef<(globId: string, dropX: number, dropY: number) => void>(() => {})
+  const connectionsRef = useRef(connections)
+  connectionsRef.current = connections
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; globId: string; inCluster: boolean } | null>(null)
   const [clusterCtx, setClusterCtx] = useState<{ x: number; y: number; clusterId: string } | null>(null)
   const [dissolveConfirm, setDissolveConfirm] = useState<string | null>(null)
@@ -66,6 +70,10 @@ export default function Galaxy({
   const [connecting, setConnecting] = useState<{ fromClusterId: string; cursorX: number; cursorY: number } | null>(null)
   const [hoveredConnection, setHoveredConnection] = useState<string | null>(null)
   const [mergePrompt, setMergePrompt] = useState<{ c1Id: string; c2Id: string; connectionId: string } | null>(null)
+  const [flashConnection, setFlashConnection] = useState<string | null>(null)
+  const [lastGlobPrompt, setLastGlobPrompt] = useState<{ globId: string; clusterId: string; x: number; y: number } | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [helpPinned, setHelpPinned] = useState(false)
   const TRASH_SIZE = 56
   const TRASH_MARGIN = 24
 
@@ -171,8 +179,8 @@ export default function Galaxy({
     const target = e.target as HTMLElement
     const tag = target.tagName
     if (tag === 'INPUT' || tag === 'BUTTON') return
-    // If pointer is on a draggable item or grip handle inside a cluster, let HTML5 drag handle it
-    if (type === 'cluster' && (target.closest('.cluster-glob-grip') || target.closest('[draggable="true"]'))) return
+    // If pointer is on a draggable item, grip handle, or link handle inside a cluster, don't start cluster drag
+    if (type === 'cluster' && (target.closest('.cluster-glob-grip') || target.closest('[draggable="true"]') || target.closest('.cluster-link-handle'))) return
 
     e.stopPropagation()
     e.preventDefault()
@@ -246,6 +254,30 @@ export default function Galaxy({
       if (dragging.current?.type === 'glob') {
         handleDropRef.current(dragging.current.id, ev.clientX, ev.clientY)
       }
+      if (dragging.current?.type === 'cluster') {
+        const cid = dragging.current.id
+        // Alt+drag severs all connections
+        if (ev.altKey) {
+          connectionsRef.current.forEach(cn => {
+            if (cn.cluster1Id === cid || cn.cluster2Id === cid) {
+              onDisconnectClusters(cn.id)
+            }
+          })
+        }
+        // Check if dropped on another cluster → merge prompt
+        // Hide dragged cluster so elementFromPoint finds the one underneath
+        const draggedEl = document.querySelector(`.cluster[data-cluster-id="${cid}"]`) as HTMLElement | null
+        if (draggedEl) draggedEl.style.pointerEvents = 'none'
+        const el = document.elementFromPoint(ev.clientX, ev.clientY)
+        if (draggedEl) draggedEl.style.pointerEvents = ''
+        const targetClusterEl = el?.closest('.cluster[data-cluster-id]') as HTMLElement | null
+        if (targetClusterEl) {
+          const targetId = targetClusterEl.dataset.clusterId
+          if (targetId && targetId !== cid) {
+            setMergePrompt({ c1Id: cid, c2Id: targetId, connectionId: '' })
+          }
+        }
+      }
       dragging.current = null
       shakeHistory.current = []
       setDraggingFreeGlob(false)
@@ -305,7 +337,7 @@ export default function Galaxy({
   }, [])
 
   useEffect(() => {
-    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null) }
+    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null); setHelpPinned(false); setHelpOpen(false) }
     window.addEventListener('click', close)
     return () => window.removeEventListener('click', close)
   }, [])
@@ -363,71 +395,100 @@ export default function Galaxy({
         </defs>
       </svg>
 
-      {/* Connection lines between clusters */}
-      <svg className="connection-lines" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 15 }}>
+      {/* Connection lines between clusters (below clusters) */}
+      <svg className="connection-lines" style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}>
         {connections.map(cn => {
           const c1 = clusters.find(c => c.id === cn.cluster1Id)
           const c2 = clusters.find(c => c.id === cn.cluster2Id)
           if (!c1 || !c2) return null
           const mx = (c1.x + c2.x) / 2
           const my = (c1.y + c2.y) / 2
+          const isFlashing = flashConnection === (cn.cluster1Id + '-' + cn.cluster2Id) || flashConnection === (cn.cluster2Id + '-' + cn.cluster1Id)
+          const isHovered = hoveredConnection === cn.id
           return (
-            <g key={cn.id}>
+            <g key={cn.id}
+              onPointerEnter={() => setHoveredConnection(cn.id)}
+              onPointerLeave={() => setHoveredConnection(prev => prev === cn.id ? null : prev)}
+              style={{ pointerEvents: 'auto' }}
+            >
               {/* Fat invisible line for hover hit area */}
               <line
                 x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y}
-                stroke="transparent" strokeWidth="20"
-                style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
-                onPointerEnter={() => setHoveredConnection(cn.id)}
-                onPointerLeave={() => setHoveredConnection(prev => prev === cn.id ? null : prev)}
+                stroke="transparent" strokeWidth="28"
+                style={{ cursor: 'pointer' }}
               />
+              {/* Glow line (flash on connect) */}
+              {isFlashing && (
+                <line
+                  x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y}
+                  stroke={cn.color} strokeWidth="6" strokeDasharray="6 4"
+                  opacity="0.6"
+                  className="connection-flash"
+                  style={{ pointerEvents: 'none' }}
+                />
+              )}
               {/* Visible line */}
               <line
                 x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y}
                 stroke={cn.color} strokeWidth="2" strokeDasharray="6 4"
-                opacity={hoveredConnection === cn.id ? 0.7 : 0.4}
-                style={{ transition: 'opacity 0.2s' }}
+                opacity={isHovered ? 0.7 : isFlashing ? 0.8 : 0.4}
+                style={{ transition: 'opacity 0.2s', pointerEvents: 'none' }}
               />
-              {/* Merge button at midpoint (on hover) */}
-              {hoveredConnection === cn.id && (
-                <foreignObject x={mx - 16} y={my - 16} width="32" height="32" style={{ pointerEvents: 'auto' }}>
-                  <div
-                    className="connection-merge-btn"
-                    title="Merge"
-                    onClick={e => {
-                      e.stopPropagation()
-                      setMergePrompt({ c1Id: cn.cluster1Id, c2Id: cn.cluster2Id, connectionId: cn.id })
-                      setHoveredConnection(null)
-                    }}
-                    onContextMenu={e => {
-                      e.preventDefault(); e.stopPropagation()
-                      onDisconnectClusters(cn.id)
-                      setHoveredConnection(null)
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-                    </svg>
+              {/* Merge + disconnect buttons at midpoint (on hover) */}
+              {isHovered && (
+                <foreignObject x={mx - 44} y={my - 20} width="88" height="40">
+                  <div style={{ display: 'flex', gap: 4, justifyContent: 'center', alignItems: 'center', width: '100%', height: '100%' }}>
+                    <div
+                      className="connection-merge-btn"
+                      title="Merge clusters"
+                      onClick={e => {
+                        e.stopPropagation()
+                        setMergePrompt({ c1Id: cn.cluster1Id, c2Id: cn.cluster2Id, connectionId: cn.id })
+                        setHoveredConnection(null)
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+                      </svg>
+                    </div>
+                    <div
+                      className="connection-merge-btn disconnect"
+                      title="Disconnect"
+                      onClick={e => {
+                        e.stopPropagation()
+                        onDisconnectClusters(cn.id)
+                        setHoveredConnection(null)
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </div>
                   </div>
                 </foreignObject>
               )}
             </g>
           )
         })}
-        {/* Temporary line while connecting */}
-        {connecting && (() => {
-          const from = clusters.find(c => c.id === connecting.fromClusterId)
-          if (!from) return null
-          return (
+      </svg>
+
+      {/* Temporary connecting line (above everything) */}
+      {connecting && (() => {
+        const from = clusters.find(c => c.id === connecting.fromClusterId)
+        if (!from) return null
+        return (
+          <svg style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 100 }}>
             <line
               x1={from.x} y1={from.y}
               x2={connecting.cursorX} y2={connecting.cursorY}
-              stroke="#7c3aed" strokeWidth="2" strokeDasharray="6 4"
-              opacity="0.6"
+              stroke="#7c3aed" strokeWidth="3" strokeDasharray="8 5"
+              opacity="0.8"
             />
-          )
-        })()}
-      </svg>
+            <circle cx={connecting.cursorX} cy={connecting.cursorY} r="8" fill="#7c3aed" opacity="0.4" />
+          </svg>
+        )
+      })()}
 
       {/* Free-floating globs */}
       {freeGlobs.map(g => (
@@ -477,6 +538,8 @@ export default function Galaxy({
             style={{ left: c.x, top: c.y, borderColor: c.color }}
             onPointerEnter={() => onTouchCluster(c.id)}
             onPointerDown={e => {
+              // Skip if clicking on link handle or drag handle
+              if ((e.target as HTMLElement).closest('.cluster-link-handle') || (e.target as HTMLElement).closest('.cluster-drag-handle')) return
               // Drag when clicking the cluster border area (within 8px of edge)
               const rect = e.currentTarget.getBoundingClientRect()
               const mx = e.clientX, my = e.clientY
@@ -498,24 +561,30 @@ export default function Galaxy({
               onPointerDown={e => {
                 e.stopPropagation()
                 e.preventDefault()
-                setConnecting({ fromClusterId: c.id, cursorX: e.clientX, cursorY: e.clientY })
+                const fromId = c.id
+                setConnecting({ fromClusterId: fromId, cursorX: e.clientX, cursorY: e.clientY })
 
                 const onMove = (ev: PointerEvent) => {
                   setConnecting(prev => prev ? { ...prev, cursorX: ev.clientX, cursorY: ev.clientY } : null)
                 }
                 const onUp = (ev: PointerEvent) => {
-                  // Check if cursor is over another cluster
+                  window.removeEventListener('pointermove', onMove)
+                  window.removeEventListener('pointerup', onUp)
+                  // Hide source cluster's link handle so elementFromPoint hits the target cluster
+                  const sourceEl = document.querySelector(`.cluster[data-cluster-id="${fromId}"]`) as HTMLElement | null
+                  if (sourceEl) sourceEl.style.pointerEvents = 'none'
                   const el = document.elementFromPoint(ev.clientX, ev.clientY)
-                  const clusterEl = el?.closest('.cluster') as HTMLElement | null
+                  if (sourceEl) sourceEl.style.pointerEvents = ''
+                  const clusterEl = el?.closest('.cluster[data-cluster-id]') as HTMLElement | null
                   if (clusterEl) {
                     const targetId = clusterEl.dataset.clusterId
-                    if (targetId && targetId !== c.id) {
-                      onConnectClusters(c.id, targetId)
+                    if (targetId && targetId !== fromId) {
+                      onConnectClusters(fromId, targetId)
+                      setFlashConnection(fromId + '-' + targetId)
+                      setTimeout(() => setFlashConnection(null), 800)
                     }
                   }
                   setConnecting(null)
-                  window.removeEventListener('pointermove', onMove)
-                  window.removeEventListener('pointerup', onUp)
                 }
                 window.addEventListener('pointermove', onMove)
                 window.addEventListener('pointerup', onUp)
@@ -569,7 +638,11 @@ export default function Galaxy({
               </div>
             </div>
 
-            {!c.collapsed && (
+            {!c.collapsed && cGlobs.length === 0 && (
+              <div className="cluster-empty">drag globs here</div>
+            )}
+
+            {!c.collapsed && cGlobs.length > 0 && (
               <div className="cluster-globs">
                 {cGlobs.map(g => (
                   <div
@@ -587,8 +660,13 @@ export default function Galaxy({
                         const margin = 60
                         const { clientX: mx, clientY: my } = e
                         if (mx < rect.left - margin || mx > rect.right + margin || my < rect.top - margin || my > rect.bottom + margin) {
-                          onRemoveFromCluster(g.id)
-                          onUpdatePos(g.id, mx, my)
+                          // If this is the last glob, prompt before removing
+                          if (c.globIds.length === 1) {
+                            setLastGlobPrompt({ globId: g.id, clusterId: c.id, x: mx, y: my })
+                          } else {
+                            onRemoveFromCluster(g.id)
+                            onUpdatePos(g.id, mx, my)
+                          }
                           setDragReorder(null)
                           return
                         }
@@ -636,7 +714,7 @@ export default function Galaxy({
             )}
 
             {c.collapsed && (
-              <span className="cluster-count">{cGlobs.length} items</span>
+              <span className="cluster-count">{cGlobs.length === 0 ? 'empty' : `${cGlobs.length} items`}</span>
             )}
           </div>
         )
@@ -691,8 +769,28 @@ export default function Galaxy({
           <button onClick={() => { onRecolor(contextMenu.globId); setContextMenu(null) }}>
             🎨 Recolor
           </button>
+          {!contextMenu.inCluster && (
+            <button onClick={() => {
+              onConvertToCluster(contextMenu.globId)
+              setContextMenu(null)
+            }}>
+              📦 Convert to cluster
+            </button>
+          )}
           {contextMenu.inCluster && (
-            <button onClick={() => { onRemoveFromCluster(contextMenu.globId); setContextMenu(null) }}>
+            <button onClick={() => {
+              const glob = globs.find(g => g.id === contextMenu.globId)
+              if (glob?.clusterId) {
+                const cluster = clusters.find(c => c.id === glob.clusterId)
+                if (cluster && cluster.globIds.length === 1) {
+                  setLastGlobPrompt({ globId: glob.id, clusterId: cluster.id, x: glob.x, y: glob.y })
+                  setContextMenu(null)
+                  return
+                }
+              }
+              onRemoveFromCluster(contextMenu.globId)
+              setContextMenu(null)
+            }}>
               ↗️ Pop out
             </button>
           )}
@@ -744,23 +842,67 @@ export default function Galaxy({
       )}
 
       {/* Shake dissolve modal */}
-      {shakeDissolve && (
-        <div className="shake-modal-overlay" onClick={e => { e.stopPropagation(); setShakeDissolve(null) }}>
+      {shakeDissolve && (() => {
+        const shakeCluster = clusters.find(c => c.id === shakeDissolve)
+        const globCount = shakeCluster?.globIds.length ?? 0
+        return (
+          <div className="shake-modal-overlay" onClick={e => { e.stopPropagation(); setShakeDissolve(null) }}>
+            <div className="shake-modal" onClick={e => e.stopPropagation()}>
+              <p>release {globCount === 1 ? 'glob' : 'all globs'}?</p>
+              <div className="shake-modal-actions">
+                <button className="shake-modal-yes" onClick={() => {
+                  setShakeDissolve(null)
+                  if (shakeCluster && globCount === 1) {
+                    // Single glob — chain into the "destroy cluster?" prompt
+                    setLastGlobPrompt({
+                      globId: shakeCluster.globIds[0],
+                      clusterId: shakeDissolve,
+                      x: shakeCluster.x,
+                      y: shakeCluster.y,
+                    })
+                  } else {
+                    onDissolveCluster(shakeDissolve)
+                  }
+                }}>
+                  yes, release
+                </button>
+                <button className="shake-modal-no" onClick={() => setShakeDissolve(null)}>
+                  no, keep
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Merge prompt modal */}
+      {/* Last glob prompt */}
+      {lastGlobPrompt && (
+        <div className="shake-modal-overlay" onClick={e => { e.stopPropagation(); setLastGlobPrompt(null) }}>
           <div className="shake-modal" onClick={e => e.stopPropagation()}>
-            <p>release all globs?</p>
+            <p>destroy cluster?</p>
+            <p className="merge-subtitle">or keep it empty for new globs</p>
             <div className="shake-modal-actions">
-              <button className="shake-modal-yes" onClick={() => { onDissolveCluster(shakeDissolve); setShakeDissolve(null) }}>
-                yes, release
+              <button className="shake-modal-yes" onClick={() => {
+                onRemoveFromCluster(lastGlobPrompt.globId)
+                onUpdatePos(lastGlobPrompt.globId, lastGlobPrompt.x, lastGlobPrompt.y)
+                onDeleteCluster(lastGlobPrompt.clusterId)
+                setLastGlobPrompt(null)
+              }}>
+                destroy
               </button>
-              <button className="shake-modal-no" onClick={() => setShakeDissolve(null)}>
-                no, keep
+              <button className="shake-modal-no" onClick={() => {
+                onRemoveFromCluster(lastGlobPrompt.globId)
+                onUpdatePos(lastGlobPrompt.globId, lastGlobPrompt.x, lastGlobPrompt.y)
+                setLastGlobPrompt(null)
+              }}>
+                keep empty
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Merge prompt modal */}
       {mergePrompt && (() => {
         const c1 = clusters.find(c => c.id === mergePrompt.c1Id)
         const c2 = clusters.find(c => c.id === mergePrompt.c2Id)
@@ -803,6 +945,45 @@ export default function Galaxy({
           </div>
         )
       })()}
+
+      {/* Help / tips panel */}
+      <div
+        className={`help-trigger ${helpOpen ? 'open' : ''}`}
+        onClick={e => {
+          e.stopPropagation()
+          if (helpPinned) {
+            setHelpPinned(false)
+            setHelpOpen(false)
+          } else {
+            setHelpPinned(true)
+            setHelpOpen(true)
+          }
+        }}
+        onMouseEnter={() => { if (!helpPinned) setHelpOpen(true) }}
+        onMouseLeave={() => { if (!helpPinned) setHelpOpen(false) }}
+      >
+        <span className="help-icon">?</span>
+        {helpOpen && (
+          <div className="help-panel" onClick={e => e.stopPropagation()}>
+            <div className="help-title">tips & shortcuts</div>
+            <div className="help-items">
+              <div className="help-item"><kbd>Enter</kbd> in capture bar to launch a glob</div>
+              <div className="help-item"><span className="help-action">Right-click</span> empty space to create a glob</div>
+              <div className="help-item"><span className="help-action">Drag</span> a glob onto another to create a cluster</div>
+              <div className="help-item"><span className="help-action">Drag</span> a glob onto a cluster to add it</div>
+              <div className="help-item"><span className="help-action">Double-click</span> a glob to edit its text</div>
+              <div className="help-item"><span className="help-action">Right-click</span> a glob for more options</div>
+              <div className="help-item"><span className="help-action">Click</span> a cluster title to rename it</div>
+              <div className="help-item"><span className="help-action">Drag</span> the <span className="help-mono">&#x2807;</span> handle to move a cluster</div>
+              <div className="help-item"><span className="help-action">Drag</span> the chain icon to connect clusters</div>
+              <div className="help-item"><span className="help-action">Hover</span> a connection line to merge or disconnect</div>
+              <div className="help-item"><kbd>Alt</kbd>+drag a cluster to sever all connections</div>
+              <div className="help-item"><span className="help-action">Shake</span> a cluster to dissolve it</div>
+              <div className="help-item"><span className="help-action">Drag</span> a free glob to the trash (bottom-right)</div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

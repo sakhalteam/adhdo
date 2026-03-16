@@ -24,12 +24,28 @@ function HomeBtn() {
 export default function App() {
   const [state, setState] = useState<GalaxyState>(load)
   const inputRef = useRef<HTMLInputElement>(null)
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSavedRef = useRef<string>('')
+  const [showSaved, setShowSaved] = useState(false)
 
-  // Auto-save on state change (debounced)
+  // Auto-save: check every 2s if state has actually changed from last save
   useEffect(() => {
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => save(state), 300)
+    const interval = setInterval(() => {
+      const json = JSON.stringify(state)
+      if (json !== lastSavedRef.current) {
+        save(state)
+        lastSavedRef.current = json
+        setShowSaved(true)
+        setTimeout(() => setShowSaved(false), 1200)
+      }
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [state])
+
+  // Also save on beforeunload
+  useEffect(() => {
+    const onUnload = () => save(state)
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
   }, [state])
 
   // Focus input on load
@@ -152,6 +168,20 @@ export default function App() {
     }))
   }, [])
 
+  // Convert a single glob into its own cluster
+  const convertToCluster = useCallback((globId: string) => {
+    setState(prev => {
+      const g = prev.globs.find(g => g.id === globId)
+      if (!g) return prev
+      const cluster = makeCluster('new cluster', g.x, g.y, [globId])
+      return {
+        ...prev,
+        globs: prev.globs.map(gl => gl.id === globId ? { ...gl, clusterId: cluster.id } : gl),
+        clusters: [...prev.clusters, cluster],
+      }
+    })
+  }, [])
+
   // Add glob to existing cluster
   const addToCluster = useCallback((globId: string, clusterId: string) => {
     setState(prev => ({
@@ -165,7 +195,7 @@ export default function App() {
     }))
   }, [])
 
-  // Remove glob from cluster (pop it free)
+  // Remove glob from cluster (pop it free) — keeps empty clusters alive
   const removeFromCluster = useCallback((globId: string) => {
     setState(prev => ({
       ...prev,
@@ -173,7 +203,17 @@ export default function App() {
       clusters: prev.clusters.map(c => ({
         ...c,
         globIds: c.globIds.filter(id => id !== globId),
-      })).filter(c => c.globIds.length > 0),
+      })),
+    }))
+  }, [])
+
+  // Delete cluster (and free its globs + remove connections)
+  const deleteCluster = useCallback((id: string) => {
+    setState(prev => ({
+      ...prev,
+      globs: prev.globs.map(g => g.clusterId === id ? { ...g, clusterId: null } : g),
+      clusters: prev.clusters.filter(c => c.id !== id),
+      connections: prev.connections.filter(cn => cn.cluster1Id !== id && cn.cluster2Id !== id),
     }))
   }, [])
 
@@ -311,11 +351,13 @@ export default function App() {
         onDuplicate={duplicateGlob}
         onUpdatePos={updateGlobPos}
         onCreateCluster={createCluster}
+        onConvertToCluster={convertToCluster}
         onAddToCluster={addToCluster}
         onRemoveFromCluster={removeFromCluster}
         onRenameCluster={renameCluster}
         onToggleClusterCollapse={toggleClusterCollapse}
         onDissolveCluster={dissolveCluster}
+        onDeleteCluster={deleteCluster}
         onUpdateClusterPos={updateClusterPos}
         onTouchCluster={touchCluster}
         onReorderClusterGlobs={reorderClusterGlobs}
@@ -335,6 +377,14 @@ export default function App() {
           onClick={e => e.stopPropagation()}
           autoFocus
         />
+      </div>
+
+      {/* Save indicator */}
+      <div className={`save-indicator ${showSaved ? 'visible' : ''}`}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        saved
       </div>
     </div>
   )
