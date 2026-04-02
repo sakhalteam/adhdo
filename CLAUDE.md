@@ -6,7 +6,7 @@
 A personal todo/brain-dump app for Nic (who has ADHD). Floating blobby "globs" drift in a galaxy-themed space. Zero-friction capture, optional organization, everything malleable. The anti-Notion. The anti-Todoist.
 
 ## Stack
-- Vite + React 18 + TypeScript + Tailwind v4 (via `@tailwindcss/vite` plugin, NOT PostCSS)
+- Vite + React 19 + TypeScript + Tailwind v4 (via `@tailwindcss/vite` plugin, NOT PostCSS)
 - `base: '/adhdo/'` in vite.config.ts
 - Deployed to sakhalteam.github.io/adhdo/
 
@@ -39,4 +39,4 @@ A personal todo/brain-dump app for Nic (who has ADHD). Floating blobby "globs" d
 ## Pending work
 - Auto-cluster orphan globs (~1 week old) into gentle "lost thoughts" cluster
 - Search/filter, keyboard shortcuts, export/import
-- Island zone integration (needs Blender zone + IslandScene.tsx wiring)
+- Island zone integration (IslandScene.tsx wired for `zone_adhdo`, needs mesh added to island.blend)
