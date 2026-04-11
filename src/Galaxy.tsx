@@ -66,6 +66,7 @@ export default function Galaxy({
   const [trashConfirm, setTrashConfirm] = useState<string | null>(null)
   const [shakeDissolve, setShakeDissolve] = useState<string | null>(null)
   const [draggingClusterId, setDraggingClusterId] = useState<string | null>(null)
+  const [clusterTrashConfirm, setClusterTrashConfirm] = useState<string | null>(null)
   const shakeHistory = useRef<{ x: number; y: number; t: number }[]>([])
   const [connecting, setConnecting] = useState<{ fromClusterId: string; cursorX: number; cursorY: number } | null>(null)
   const [hoveredConnection, setHoveredConnection] = useState<string | null>(null)
@@ -264,6 +265,23 @@ export default function Galaxy({
             }
           })
         }
+        // Check if dropped on trash zone (bottom-right corner)
+        const w = window.innerWidth
+        const h = window.innerHeight
+        const trashCx = w - TRASH_MARGIN - TRASH_SIZE / 2
+        const trashCy = h - 80 - TRASH_SIZE / 2
+        const tdx = ev.clientX - trashCx
+        const tdy = ev.clientY - trashCy
+        if (Math.sqrt(tdx * tdx + tdy * tdy) < TRASH_SIZE) {
+          dragging.current = null
+          shakeHistory.current = []
+          setDraggingFreeGlob(false)
+          setDraggingClusterId(null)
+          setClusterTrashConfirm(cid)
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          return
+        }
         // Check if dropped on another cluster → merge prompt
         // Hide dragged cluster so elementFromPoint finds the one underneath
         const draggedEl = document.querySelector(`.cluster[data-cluster-id="${cid}"]`) as HTMLElement | null
@@ -401,6 +419,41 @@ export default function Galaxy({
           const c1 = clusters.find(c => c.id === cn.cluster1Id)
           const c2 = clusters.find(c => c.id === cn.cluster2Id)
           if (!c1 || !c2) return null
+
+          // Compute edge points so line doesn't bisect clusters
+          const dx = c2.x - c1.x
+          const dy = c2.y - c1.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          const nx = dist > 0 ? dx / dist : 0
+          const ny = dist > 0 ? dy / dist : 0
+
+          // Get cluster element sizes (fall back to reasonable defaults)
+          const NODE_RADIUS = 6
+          const PADDING = 12 // extra gap between cluster edge and node
+          const el1 = document.querySelector(`.cluster[data-cluster-id="${c1.id}"]`) as HTMLElement | null
+          const el2 = document.querySelector(`.cluster[data-cluster-id="${c2.id}"]`) as HTMLElement | null
+          const hw1 = el1 ? el1.offsetWidth / 2 : 90
+          const hh1 = el1 ? el1.offsetHeight / 2 : 50
+          const hw2 = el2 ? el2.offsetWidth / 2 : 90
+          const hh2 = el2 ? el2.offsetHeight / 2 : 50
+
+          // Ray-box intersection: how far along (nx,ny) to exit the cluster's bounding box
+          const edgeDist = (hw: number, hh: number) => {
+            if (Math.abs(nx) < 0.001 && Math.abs(ny) < 0.001) return 0
+            const tx = Math.abs(nx) > 0.001 ? hw / Math.abs(nx) : Infinity
+            const ty = Math.abs(ny) > 0.001 ? hh / Math.abs(ny) : Infinity
+            return Math.min(tx, ty) + PADDING
+          }
+
+          const d1 = edgeDist(hw1, hh1)
+          const d2 = edgeDist(hw2, hh2)
+
+          // Node positions at cluster edges
+          const x1 = c1.x + nx * d1
+          const y1 = c1.y + ny * d1
+          const x2 = c2.x - nx * d2
+          const y2 = c2.y - ny * d2
+
           const mx = (c1.x + c2.x) / 2
           const my = (c1.y + c2.y) / 2
           const isFlashing = flashConnection === (cn.cluster1Id + '-' + cn.cluster2Id) || flashConnection === (cn.cluster2Id + '-' + cn.cluster1Id)
@@ -413,25 +466,43 @@ export default function Galaxy({
             >
               {/* Fat invisible line for hover hit area */}
               <line
-                x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y}
+                x1={x1} y1={y1} x2={x2} y2={y2}
                 stroke="transparent" strokeWidth="28"
                 style={{ cursor: 'pointer' }}
               />
               {/* Glow line (flash on connect) */}
               {isFlashing && (
                 <line
-                  x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y}
+                  x1={x1} y1={y1} x2={x2} y2={y2}
                   stroke={cn.color} strokeWidth="6" strokeDasharray="6 4"
                   opacity="0.6"
                   className="connection-flash"
                   style={{ pointerEvents: 'none' }}
                 />
               )}
-              {/* Visible line */}
+              {/* Visible dashed line between edge nodes */}
               <line
-                x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y}
+                x1={x1} y1={y1} x2={x2} y2={y2}
                 stroke={cn.color} strokeWidth="2" strokeDasharray="6 4"
                 opacity={isHovered ? 0.7 : isFlashing ? 0.8 : 0.4}
+                style={{ transition: 'opacity 0.2s', pointerEvents: 'none' }}
+              />
+              {/* Endpoint node at cluster 1 edge */}
+              <circle cx={x1} cy={y1} r={NODE_RADIUS}
+                fill={cn.color} opacity={isHovered ? 0.9 : 0.6}
+                style={{ transition: 'opacity 0.2s', pointerEvents: 'none' }}
+              />
+              <circle cx={x1} cy={y1} r={NODE_RADIUS + 3}
+                fill={cn.color} opacity={isHovered ? 0.2 : 0.1}
+                style={{ transition: 'opacity 0.2s', pointerEvents: 'none' }}
+              />
+              {/* Endpoint node at cluster 2 edge */}
+              <circle cx={x2} cy={y2} r={NODE_RADIUS}
+                fill={cn.color} opacity={isHovered ? 0.9 : 0.6}
+                style={{ transition: 'opacity 0.2s', pointerEvents: 'none' }}
+              />
+              <circle cx={x2} cy={y2} r={NODE_RADIUS + 3}
+                fill={cn.color} opacity={isHovered ? 0.2 : 0.1}
                 style={{ transition: 'opacity 0.2s', pointerEvents: 'none' }}
               />
               {/* Merge + disconnect buttons at midpoint (on hover) */}
@@ -823,8 +894,8 @@ export default function Galaxy({
         </div>
       )}
 
-      {/* Trash zone (visible when dragging a free glob) */}
-      <div className={`trash-zone ${draggingFreeGlob ? 'visible' : ''}`}>
+      {/* Trash zone (visible when dragging a free glob or a cluster) */}
+      <div className={`trash-zone ${draggingFreeGlob || draggingClusterId ? 'visible' : ''}`}>
         <span className="trash-icon">🗑️</span>
       </div>
 
@@ -840,6 +911,37 @@ export default function Galaxy({
           </button>
         </div>
       )}
+
+      {/* Cluster trash confirmation toast */}
+      {clusterTrashConfirm && (() => {
+        const c = clusters.find(cl => cl.id === clusterTrashConfirm)
+        if (!c) return null
+        const globCount = c.globIds.length
+        return (
+          <div className="trash-toast" onClick={e => e.stopPropagation()}>
+            <span className="trash-toast-label">delete cluster "{c.name}"{globCount > 0 ? ` and ${globCount} glob${globCount > 1 ? 's' : ''}` : ''}?</span>
+            <button className="trash-toast-btn" onClick={() => {
+              // Delete all globs in the cluster, then the cluster itself
+              c.globIds.forEach(gid => onDelete(gid))
+              onDeleteCluster(clusterTrashConfirm)
+              setClusterTrashConfirm(null)
+            }}>
+              delete all
+            </button>
+            {globCount > 0 && (
+              <button className="trash-toast-btn" style={{ background: 'rgba(139, 92, 246, 0.15)', borderColor: 'rgba(139, 92, 246, 0.4)', color: '#a78bfa' }} onClick={() => {
+                onDissolveCluster(clusterTrashConfirm)
+                setClusterTrashConfirm(null)
+              }}>
+                release globs
+              </button>
+            )}
+            <button className="trash-toast-cancel" onClick={() => setClusterTrashConfirm(null)}>
+              cancel
+            </button>
+          </div>
+        )
+      })()}
 
       {/* Shake dissolve modal */}
       {shakeDissolve && (() => {
@@ -979,7 +1081,7 @@ export default function Galaxy({
               <div className="help-item"><span className="help-action">Hover</span> a connection line to merge or disconnect</div>
               <div className="help-item"><kbd>Alt</kbd>+drag a cluster to sever all connections</div>
               <div className="help-item"><span className="help-action">Shake</span> a cluster to dissolve it</div>
-              <div className="help-item"><span className="help-action">Drag</span> a free glob to the trash (bottom-right)</div>
+              <div className="help-item"><span className="help-action">Drag</span> a glob or cluster to the trash (bottom-right)</div>
               <div className="help-item"><span className="help-action">Drag</span> a cluster onto another to merge them</div>
               <div className="help-item"><kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo</div>
             </div>
