@@ -119,6 +119,72 @@ body {
   transform: translateY(0);
 }
 
+/* ── auth button ─────────────────────────────────────── */
+.auth-btn {
+  position: fixed;
+  top: 12px;
+  right: 60px;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 99px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+}
+.auth-btn:hover {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--border-bright);
+}
+.auth-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34d399;
+}
+.auth-dot.synced {
+  box-shadow: 0 0 4px #34d399;
+}
+
+/* ── cloud sync indicator ────────────────────────────── */
+.cloud-indicator {
+  position: fixed;
+  top: 40px;
+  right: 14px;
+  z-index: 100;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.8;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+.cloud-indicator.saving {
+  color: #67e8f9;
+  background: rgba(103, 232, 249, 0.1);
+  border: 1px solid rgba(103, 232, 249, 0.2);
+}
+.cloud-indicator.saved {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+}
+.cloud-indicator.error {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
 /* ── capture bar ─────────────────────────────────────── */
 .capture-bar {
   position: fixed;
