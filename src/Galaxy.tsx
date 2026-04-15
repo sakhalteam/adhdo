@@ -28,6 +28,10 @@ interface Props {
   onConnectClusters: (c1Id: string, c2Id: string) => void
   onDisconnectClusters: (connectionId: string) => void
   onMergeClusters: (c1Id: string, c2Id: string, newName: string) => void
+  onGatherFreeGlobs: () => void
+  onClearAll: () => void
+  onExportJSON: () => void
+  onImportJSON: (file: File) => void
 }
 
 const DAMPING = 0.9995
@@ -48,6 +52,7 @@ export default function Galaxy({
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
   onRecolor,
   onConnectClusters, onDisconnectClusters, onMergeClusters,
+  onGatherFreeGlobs, onClearAll, onExportJSON, onImportJSON,
 }: Props) {
   const { globs, clusters, connections } = state
   const animRef = useRef(0)
@@ -75,6 +80,52 @@ export default function Galaxy({
   const [lastGlobPrompt, setLastGlobPrompt] = useState<{ globId: string; clusterId: string; x: number; y: number } | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [helpPinned, setHelpPinned] = useState(false)
+  const [clearConfirm, setClearConfirm] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQ, setSearchQ] = useState('')
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus()
+  }, [searchOpen])
+
+  useEffect(() => {
+    if (!highlightId) return
+    const t = setTimeout(() => setHighlightId(null), 2200)
+    return () => clearTimeout(t)
+  }, [highlightId])
+
+  const searchResults = (() => {
+    const q = searchQ.trim().toLowerCase()
+    if (!q) return [] as { type: 'glob' | 'cluster'; id: string; label: string; sub?: string }[]
+    const results: { type: 'glob' | 'cluster'; id: string; label: string; sub?: string }[] = []
+    for (const c of clusters) {
+      if (c.name.toLowerCase().includes(q)) {
+        results.push({ type: 'cluster', id: c.id, label: c.name, sub: `cluster · ${c.globIds.length} globs` })
+      }
+    }
+    for (const g of globs) {
+      if (g.text.toLowerCase().includes(q)) {
+        const parent = g.clusterId ? clusters.find(c => c.id === g.clusterId) : null
+        results.push({ type: 'glob', id: g.id, label: g.text, sub: parent ? `in ${parent.name}` : 'free glob' })
+      }
+    }
+    return results.slice(0, 30)
+  })()
+
+  const jumpToResult = (r: { type: 'glob' | 'cluster'; id: string }) => {
+    if (r.type === 'glob') {
+      const g = globs.find(gl => gl.id === r.id)
+      if (g?.clusterId) {
+        const parent = clusters.find(c => c.id === g.clusterId)
+        if (parent?.collapsed) onToggleClusterCollapse(parent.id)
+      }
+    }
+    setHighlightId(r.id)
+    setSearchOpen(false)
+    setSearchQ('')
+  }
   const TRASH_SIZE = 56
   const TRASH_MARGIN = 24
 
@@ -356,8 +407,38 @@ export default function Galaxy({
 
   useEffect(() => {
     const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null); setHelpPinned(false); setHelpOpen(false) }
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const active = document.activeElement as HTMLElement | null
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+        active.blur()
+      }
+      close()
+      setClearConfirm(false)
+      setShakeDissolve(null)
+      setLastGlobPrompt(null)
+      setMergePrompt(null)
+      setTrashConfirm(null)
+      setClusterTrashConfirm(null)
+      setNewGlobPos(null)
+      setSearchOpen(false)
+      setSearchQ('')
+    }
+    const onSearch = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(v => !v)
+        setSearchQ('')
+      }
+    }
     window.addEventListener('click', close)
-    return () => window.removeEventListener('click', close)
+    window.addEventListener('keydown', onEsc)
+    window.addEventListener('keydown', onSearch)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('keydown', onEsc)
+      window.removeEventListener('keydown', onSearch)
+    }
   }, [])
 
   // Drag reorder within clusters
@@ -565,13 +646,13 @@ export default function Galaxy({
       {freeGlobs.map(g => (
         <div
           key={g.id}
-          className={`glob ${g.flagged ? 'flagged' : ''}`}
+          className={`glob ${g.flagged ? 'flagged' : ''} ${highlightId === g.id ? 'highlight-pulse' : ''}`}
           style={{
             left: g.x,
             top: g.y,
             width: g.radius * 2,
             height: g.radius * 2,
-            background: g.color,
+            ['--glob-color' as string]: g.color,
             animationDelay: `${-(g.blobSeed % 10)}s`,
           }}
           onPointerDown={e => onPointerDown(e, g.id, 'glob')}
@@ -604,7 +685,7 @@ export default function Galaxy({
         return (
           <div
             key={c.id}
-            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isIdle ? 'drifting' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''}`}
+            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isIdle ? 'drifting' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''} ${highlightId === c.id ? 'highlight-pulse' : ''}`}
             data-cluster-id={c.id}
             style={{ left: c.x, top: c.y, borderColor: c.color }}
             onPointerEnter={() => onTouchCluster(c.id)}
@@ -718,7 +799,7 @@ export default function Galaxy({
                 {cGlobs.map(g => (
                   <div
                     key={g.id}
-                    className={`cluster-glob-item ${g.flagged ? 'flagged' : ''} ${g.done ? 'done' : ''} ${dragReorder?.overGlobId === g.id ? 'drag-over' : ''}`}
+                    className={`cluster-glob-item ${g.flagged ? 'flagged' : ''} ${g.done ? 'done' : ''} ${dragReorder?.overGlobId === g.id ? 'drag-over' : ''} ${highlightId === g.id ? 'highlight-pulse' : ''}`}
                     style={{ borderLeftColor: g.color }}
                     draggable
                     onDragStart={e => { e.stopPropagation(); onReorderDragStart(c.id, g.id) }}
@@ -1084,10 +1165,121 @@ export default function Galaxy({
               <div className="help-item"><span className="help-action">Drag</span> a glob or cluster to the trash (bottom-right)</div>
               <div className="help-item"><span className="help-action">Drag</span> a cluster onto another to merge them</div>
               <div className="help-item"><kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo</div>
+              <div className="help-item"><kbd>Ctrl</kbd>+<kbd>K</kbd> to search, <kbd>Esc</kbd> to close menus</div>
+            </div>
+
+            <div className="help-divider" />
+            <div className="help-title">backup</div>
+            <div className="help-actions">
+              <button
+                className="help-action-btn"
+                onClick={() => { onExportJSON(); setHelpOpen(false); setHelpPinned(false) }}
+                title="Download your galaxy as JSON"
+              >
+                export JSON
+              </button>
+              <label className="help-action-btn" title="Restore from a previously exported JSON">
+                import JSON
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  style={{ display: 'none' }}
+                  onClick={e => e.stopPropagation()}
+                  onChange={e => {
+                    const f = e.target.files?.[0]
+                    if (f) onImportJSON(f)
+                    e.target.value = ''
+                    setHelpOpen(false)
+                    setHelpPinned(false)
+                  }}
+                />
+              </label>
+            </div>
+
+            <div className="help-divider" />
+            <div className="help-title help-title--danger">recovery</div>
+            <div className="help-actions">
+              <button
+                className="help-action-btn"
+                onClick={() => { onGatherFreeGlobs(); setHelpOpen(false); setHelpPinned(false) }}
+                title="Scoop every free-floating glob into an orphans cluster"
+              >
+                gather free globs
+              </button>
+              <button
+                className="help-action-btn help-action-btn--danger"
+                onClick={() => setClearConfirm(true)}
+                title="Delete everything — globs, clusters, connections"
+              >
+                clear everything
+              </button>
             </div>
           </div>
         )}
       </div>
+
+      {searchOpen && (
+        <div className="search-overlay" onClick={e => { e.stopPropagation(); setSearchOpen(false); setSearchQ('') }}>
+          <div className="search-modal" onClick={e => e.stopPropagation()}>
+            <input
+              ref={searchInputRef}
+              className="search-input"
+              placeholder="search globs and clusters..."
+              value={searchQ}
+              onChange={e => setSearchQ(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && searchResults[0]) {
+                  jumpToResult(searchResults[0])
+                }
+              }}
+            />
+            {searchQ.trim() && (
+              <div className="search-results">
+                {searchResults.length === 0 ? (
+                  <div className="search-empty">no matches</div>
+                ) : (
+                  searchResults.map(r => (
+                    <button
+                      key={`${r.type}-${r.id}`}
+                      className="search-result"
+                      onClick={() => jumpToResult(r)}
+                    >
+                      <span className={`search-result-kind ${r.type}`}>{r.type}</span>
+                      <span className="search-result-label">{r.label}</span>
+                      {r.sub && <span className="search-result-sub">{r.sub}</span>}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+            <div className="search-hint">
+              <kbd>↵</kbd> jump to first · <kbd>Esc</kbd> close
+            </div>
+          </div>
+        </div>
+      )}
+
+      {clearConfirm && (
+        <div className="shake-modal-overlay" onClick={e => { e.stopPropagation(); setClearConfirm(false) }}>
+          <div className="shake-modal" onClick={e => e.stopPropagation()}>
+            <p>clear everything?</p>
+            <p className="merge-subtitle">deletes all globs, clusters, and connections. undo with Ctrl+Z.</p>
+            <div className="shake-modal-actions">
+              <button className="shake-modal-yes" onClick={() => {
+                onClearAll()
+                setClearConfirm(false)
+                setHelpOpen(false)
+                setHelpPinned(false)
+              }}>
+                yes, nuke it
+              </button>
+              <button className="shake-modal-no" onClick={() => setClearConfirm(false)}>
+                cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

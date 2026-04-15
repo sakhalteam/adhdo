@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
 import { supabase } from './supabaseClient'
-import type { GalaxyState, Glob } from './types'
+import type { GalaxyState, Glob, Cluster } from './types'
 import type { User } from '@supabase/supabase-js'
 import Galaxy from './Galaxy'
 
@@ -56,7 +56,7 @@ export default function App() {
   const [showSaved, setShowSaved] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const remoteSaveTimer = useRef<ReturnType<typeof setTimeout>>()
+  const remoteSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const needsRemoteSave = useRef(false)
 
   // Auth state
@@ -383,6 +383,95 @@ export default function App() {
     }))
   }, [setState])
 
+  const gatherFreeGlobs = useCallback((minAgeMs = 0) => {
+    setState(prev => {
+      const cutoff = Date.now() - minAgeMs
+      const targets = prev.globs.filter(g => !g.clusterId && g.createdAt <= cutoff)
+      if (targets.length === 0) return prev
+      const targetIds = new Set(targets.map(g => g.id))
+
+      const existing = prev.clusters.find(c => c.role === 'orphans')
+      if (existing) {
+        return {
+          ...prev,
+          globs: prev.globs.map(g => targetIds.has(g.id) ? { ...g, clusterId: existing.id } : g),
+          clusters: prev.clusters.map(c =>
+            c.id === existing.id
+              ? { ...c, globIds: [...c.globIds, ...targets.map(g => g.id)], lastInteraction: Date.now() }
+              : c
+          ),
+        }
+      }
+
+      const cx = targets.reduce((s, g) => s + g.x, 0) / targets.length
+      const cy = targets.reduce((s, g) => s + g.y, 0) / targets.length
+      const bucket: Cluster = {
+        ...makeCluster('orphans', cx, cy, targets.map(g => g.id)),
+        role: 'orphans',
+      }
+      return {
+        ...prev,
+        globs: prev.globs.map(g => targetIds.has(g.id) ? { ...g, clusterId: bucket.id } : g),
+        clusters: [...prev.clusters, bucket],
+      }
+    })
+  }, [setState])
+
+  // Auto-gather: sweep free globs older than 7 days into the orphans bucket.
+  // Runs once on mount and again every 6 hours — gentle nudge, not aggressive.
+  useEffect(() => {
+    const ORPHAN_AGE_MS = 7 * 24 * 60 * 60 * 1000
+    const sweep = () => gatherFreeGlobs(ORPHAN_AGE_MS)
+    const t = setTimeout(sweep, 2000)
+    const interval = setInterval(sweep, 6 * 60 * 60 * 1000)
+    return () => { clearTimeout(t); clearInterval(interval) }
+  }, [gatherFreeGlobs])
+
+  const clearAll = useCallback(() => {
+    setState(() => ({ globs: [], clusters: [], connections: [] }))
+  }, [setState])
+
+  const exportJSON = useCallback(() => {
+    const payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      state,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `adhdo-backup-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, [state])
+
+  const importJSON = useCallback((file: File) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result))
+        const incoming: unknown = parsed?.state ?? parsed
+        if (
+          !incoming ||
+          typeof incoming !== 'object' ||
+          !Array.isArray((incoming as GalaxyState).globs) ||
+          !Array.isArray((incoming as GalaxyState).clusters) ||
+          !Array.isArray((incoming as GalaxyState).connections)
+        ) {
+          alert('Invalid backup file — missing globs/clusters/connections.')
+          return
+        }
+        setState(() => incoming as GalaxyState)
+      } catch {
+        alert('Could not parse backup file.')
+      }
+    }
+    reader.readAsText(file)
+  }, [setState])
+
   const mergeClusters = useCallback((c1Id: string, c2Id: string, newName: string) => {
     setState(prev => {
       const c1 = prev.clusters.find(c => c.id === c1Id)
@@ -450,6 +539,14 @@ export default function App() {
     }
   }
 
+  const handleSend = () => {
+    const input = inputRef.current
+    if (!input) return
+    addGlob(input.value)
+    input.value = ''
+    input.focus()
+  }
+
   return (
     <div className="app" onClick={refocusInput}>
       <HomeBtn />
@@ -507,18 +604,35 @@ export default function App() {
         onConnectClusters={connectClusters}
         onDisconnectClusters={disconnectClusters}
         onMergeClusters={mergeClusters}
+        onGatherFreeGlobs={gatherFreeGlobs}
+        onClearAll={clearAll}
+        onExportJSON={exportJSON}
+        onImportJSON={importJSON}
       />
 
       <div className="capture-bar">
-        <input
-          ref={inputRef}
-          type="text"
-          className="capture-input"
-          placeholder="brain dump here... hit enter to launch"
-          onKeyDown={handleKeyDown}
-          onClick={e => e.stopPropagation()}
-          autoFocus
-        />
+        <div className="capture-wrap">
+          <input
+            ref={inputRef}
+            type="text"
+            className="capture-input"
+            placeholder="brain dump here... hit enter to launch"
+            onKeyDown={handleKeyDown}
+            onClick={e => e.stopPropagation()}
+            autoFocus
+          />
+          <button
+            className="capture-send"
+            onClick={e => { e.stopPropagation(); handleSend() }}
+            aria-label="Launch glob"
+            title="Launch glob"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Auth button */}

@@ -65,10 +65,10 @@ export function saveLocal(state: GalaxyState) {
 }
 
 export function loadLocal(): GalaxyState {
+  const raw = localStorage.getItem(STORAGE_KEY)
+  if (!raw) return { globs: [], clusters: [], connections: [] }
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    const parsed = JSON.parse(raw!)
-    return hydrateState(parsed)
+    return hydrateState(JSON.parse(raw))
   } catch { /* ignore corrupt data */ }
   return { globs: [], clusters: [], connections: [] }
 }

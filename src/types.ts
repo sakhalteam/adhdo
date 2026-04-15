@@ -28,6 +28,8 @@ export interface Cluster {
   collapsed: boolean
   /** Timestamp of last user interaction — drift starts after idle */
   lastInteraction: number
+  /** Reserved role — 'orphans' is the auto/manual gather bucket, survives rename */
+  role?: 'orphans'
 }
 
 export interface Connection {
