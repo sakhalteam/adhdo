@@ -16,6 +16,7 @@ interface Props {
   onCreateCluster: (id1: string, id2: string, x: number, y: number) => void
   onConvertToCluster: (globId: string) => void
   onAddToCluster: (globId: string, clusterId: string) => void
+  onAddGlobToCluster: (text: string, clusterId: string) => void
   onRemoveFromCluster: (globId: string) => void
   onRenameCluster: (id: string, name: string) => void
   onToggleClusterCollapse: (id: string) => void
@@ -47,7 +48,7 @@ export default function Galaxy({
   state, updateGlobs, updateState,
   onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleDone,
   onDuplicate, onUpdatePos,
-  onCreateCluster, onConvertToCluster, onAddToCluster, onRemoveFromCluster,
+  onCreateCluster, onConvertToCluster, onAddToCluster, onAddGlobToCluster, onRemoveFromCluster,
   onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
   onRecolor,
@@ -78,6 +79,7 @@ export default function Galaxy({
   const [mergePrompt, setMergePrompt] = useState<{ c1Id: string; c2Id: string; connectionId: string } | null>(null)
   const [flashConnection, setFlashConnection] = useState<string | null>(null)
   const [lastGlobPrompt, setLastGlobPrompt] = useState<{ globId: string; clusterId: string; x: number; y: number } | null>(null)
+  const [addingToClusterId, setAddingToClusterId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [helpPinned, setHelpPinned] = useState(false)
   const [clearConfirm, setClearConfirm] = useState(false)
@@ -232,7 +234,7 @@ export default function Galaxy({
     const tag = target.tagName
     if (tag === 'INPUT' || tag === 'BUTTON') return
     // If pointer is on a draggable item, grip handle, or link handle inside a cluster, don't start cluster drag
-    if (type === 'cluster' && (target.closest('.cluster-glob-grip') || target.closest('[draggable="true"]') || target.closest('.cluster-link-handle'))) return
+    if (type === 'cluster' && (target.closest('.cluster-glob-grip') || target.closest('[draggable="true"]') || target.closest('.cluster-link-handle') || target.closest('.cluster-add-handle'))) return
 
     e.stopPropagation()
     e.preventDefault()
@@ -691,7 +693,7 @@ export default function Galaxy({
             onPointerEnter={() => onTouchCluster(c.id)}
             onPointerDown={e => {
               // Skip if clicking on link handle or drag handle
-              if ((e.target as HTMLElement).closest('.cluster-link-handle') || (e.target as HTMLElement).closest('.cluster-drag-handle')) return
+              if ((e.target as HTMLElement).closest('.cluster-link-handle') || (e.target as HTMLElement).closest('.cluster-drag-handle') || (e.target as HTMLElement).closest('.cluster-add-handle')) return
               // Drag when clicking the cluster border area (within 8px of edge)
               const rect = e.currentTarget.getBoundingClientRect()
               const mx = e.clientX, my = e.clientY
@@ -867,6 +869,36 @@ export default function Galaxy({
 
             {c.collapsed && (
               <span className="cluster-count">{cGlobs.length === 0 ? 'empty' : `${cGlobs.length} items`}</span>
+            )}
+
+            {addingToClusterId === c.id ? (
+              <div className="cluster-add-input-wrap">
+                <input
+                  className="cluster-add-input"
+                  placeholder="add a note..."
+                  autoFocus
+                  onClick={e => e.stopPropagation()}
+                  onPointerDown={e => e.stopPropagation()}
+                  onBlur={e => {
+                    if (e.currentTarget.value.trim()) onAddGlobToCluster(e.currentTarget.value, c.id)
+                    setAddingToClusterId(null)
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      if (e.currentTarget.value.trim()) onAddGlobToCluster(e.currentTarget.value, c.id)
+                      setAddingToClusterId(null)
+                    }
+                    if (e.key === 'Escape') setAddingToClusterId(null)
+                  }}
+                />
+              </div>
+            ) : (
+              <button
+                className="cluster-add-handle"
+                title="Add a note"
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => { e.stopPropagation(); setAddingToClusterId(c.id) }}
+              >＋</button>
             )}
           </div>
         )

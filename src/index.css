@@ -437,11 +437,15 @@ body {
 }
 
 
-.cluster-drag-handle {
+.cluster-drag-handle,
+.cluster-link-handle,
+.cluster-add-handle {
   position: absolute;
   left: -6px;
-  top: 18px;
   transform: translate(-100%, -50%) scale(0.8);
+  width: 28px;
+  height: 28px;
+  padding: 0;
   background: rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -449,42 +453,6 @@ body {
   border-radius: 8px;
   color: var(--muted);
   font-size: 14px;
-  padding: 6px 5px;
-  cursor: grab;
-  opacity: 0;
-  transition: opacity 0.2s 1s, transform 0.2s 1s, background 0.15s, border-color 0.15s;
-  line-height: 1;
-  pointer-events: auto;
-  user-select: none;
-}
-.cluster-drag-handle:active { cursor: grabbing; }
-.cluster:hover .cluster-drag-handle,
-.cluster-drag-handle:hover {
-  opacity: 0.7;
-  transform: translate(-100%, -50%) scale(1);
-  transition: opacity 0.2s, transform 0.2s, background 0.15s, border-color 0.15s;
-}
-.cluster:hover .cluster-drag-handle:hover,
-.cluster-drag-handle:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
-  border-color: var(--border-bright);
-}
-
-/* ── cluster link handle ─────────────────────────────── */
-.cluster-link-handle {
-  position: absolute;
-  right: -6px;
-  top: 18px;
-  transform: translate(100%, -50%) scale(0.8);
-  background: rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--muted);
-  padding: 5px 5px;
-  cursor: crosshair;
   opacity: 0;
   transition: opacity 0.2s 1s, transform 0.2s 1s, background 0.15s, border-color 0.15s;
   line-height: 1;
@@ -494,18 +462,49 @@ body {
   align-items: center;
   justify-content: center;
 }
+.cluster-drag-handle { top: 18px; cursor: grab; }
+.cluster-link-handle { top: 52px; cursor: crosshair; }
+.cluster-add-handle  { top: 86px; cursor: pointer; }
+
+.cluster-drag-handle:active,
 .cluster-link-handle:active { cursor: grabbing; }
+
+.cluster:hover .cluster-drag-handle,
 .cluster:hover .cluster-link-handle,
-.cluster-link-handle:hover {
+.cluster:hover .cluster-add-handle,
+.cluster-drag-handle:hover,
+.cluster-link-handle:hover,
+.cluster-add-handle:hover {
   opacity: 0.7;
-  transform: translate(100%, -50%) scale(1);
+  transform: translate(-100%, -50%) scale(1);
   transition: opacity 0.2s, transform 0.2s, background 0.15s, border-color 0.15s;
 }
-.cluster:hover .cluster-link-handle:hover,
-.cluster-link-handle:hover {
+.cluster-drag-handle:hover,
+.cluster-link-handle:hover,
+.cluster-add-handle:hover {
   opacity: 1;
   background: rgba(255, 255, 255, 0.1);
   border-color: var(--border-bright);
+}
+
+.cluster-add-input-wrap {
+  position: absolute;
+  left: -6px;
+  top: 86px;
+  transform: translate(-100%, -50%);
+  pointer-events: auto;
+}
+.cluster-add-input {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  color: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+  min-width: 180px;
 }
 
 /* ── connection merge button ────────────────────────── */

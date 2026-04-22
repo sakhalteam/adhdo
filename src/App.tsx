@@ -308,6 +308,24 @@ export default function App() {
     }))
   }, [setState])
 
+  const addGlobToCluster = useCallback((text: string, clusterId: string) => {
+    if (!text.trim()) return
+    setState(prev => {
+      const cluster = prev.clusters.find(c => c.id === clusterId)
+      if (!cluster) return prev
+      const g = { ...makeGlob(text.trim(), cluster.x, cluster.y), clusterId }
+      return {
+        ...prev,
+        globs: [...prev.globs, g],
+        clusters: prev.clusters.map(c =>
+          c.id === clusterId
+            ? { ...c, globIds: [...c.globIds, g.id], lastInteraction: Date.now() }
+            : c
+        ),
+      }
+    })
+  }, [setState])
+
   const removeFromCluster = useCallback((globId: string) => {
     setState(prev => ({
       ...prev,
@@ -592,6 +610,7 @@ export default function App() {
         onCreateCluster={createCluster}
         onConvertToCluster={convertToCluster}
         onAddToCluster={addToCluster}
+        onAddGlobToCluster={addGlobToCluster}
         onRemoveFromCluster={removeFromCluster}
         onRenameCluster={renameCluster}
         onToggleClusterCollapse={toggleClusterCollapse}
