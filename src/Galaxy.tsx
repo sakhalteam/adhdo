@@ -804,15 +804,26 @@ export default function Galaxy({
                     className={`cluster-glob-item ${g.flagged ? 'flagged' : ''} ${g.done ? 'done' : ''} ${dragReorder?.overGlobId === g.id ? 'drag-over' : ''} ${highlightId === g.id ? 'highlight-pulse' : ''}`}
                     style={{ borderLeftColor: g.color }}
                     draggable
-                    onDragStart={e => { e.stopPropagation(); onReorderDragStart(c.id, g.id) }}
+                    onDragStart={e => { e.stopPropagation(); onReorderDragStart(c.id, g.id); setDraggingFreeGlob(true) }}
                     onDragOver={e => { e.preventDefault(); e.stopPropagation(); onReorderDragOver(g.id) }}
                     onDrop={e => { e.preventDefault(); e.stopPropagation(); onReorderDrop() }}
                     onDragEnd={e => {
+                      setDraggingFreeGlob(false)
+                      const { clientX: mx, clientY: my } = e
+                      // Check trash drop first — bypasses the last-glob prompt
+                      const w = window.innerWidth, h = window.innerHeight
+                      const trashCx = w - TRASH_MARGIN - TRASH_SIZE / 2
+                      const trashCy = h - 80 - TRASH_SIZE / 2
+                      const tdx = mx - trashCx, tdy = my - trashCy
+                      if (Math.sqrt(tdx * tdx + tdy * tdy) < TRASH_SIZE) {
+                        setTrashConfirm(g.id)
+                        setDragReorder(null)
+                        return
+                      }
                       const clusterEl = (e.target as HTMLElement).closest('.cluster')
                       if (clusterEl) {
                         const rect = clusterEl.getBoundingClientRect()
                         const margin = 60
-                        const { clientX: mx, clientY: my } = e
                         if (mx < rect.left - margin || mx > rect.right + margin || my < rect.top - margin || my > rect.bottom + margin) {
                           // If this is the last glob, prompt before removing
                           if (c.globIds.length === 1) {
