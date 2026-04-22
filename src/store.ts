@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 const STORAGE_KEY = 'adhdo-galaxy'
 const UPDATED_AT_KEY = 'adhdo-updated-at'
+const ONBOARDING_SEEN_KEY = 'adhdo-seen-onboarding-v1'
 
 const PALETTE = [
   '#7c3aed', '#a78bfa', '#6366f1', '#818cf8',
@@ -21,8 +22,8 @@ export function genId(): string {
 /** Strip physics/visual noise from state before persisting */
 function serializeState(state: GalaxyState) {
   return {
-    globs: state.globs.map(({ x, y, vx, vy, radius, blobSeed, ...rest }) => rest),
-    clusters: state.clusters.map(({ x, y, vx, vy, lastInteraction, ...rest }) => rest),
+    globs: state.globs.map(({ vx, vy, blobSeed, ...rest }) => rest),
+    clusters: state.clusters.map(({ vx, vy, lastInteraction, ...rest }) => rest),
     connections: state.connections,
   }
 }
@@ -75,6 +76,14 @@ export function loadLocal(): GalaxyState {
 
 export function getLocalUpdatedAt(): string | null {
   return localStorage.getItem(UPDATED_AT_KEY)
+}
+
+export function hasSeenOnboarding(): boolean {
+  return localStorage.getItem(ONBOARDING_SEEN_KEY) === '1'
+}
+
+export function markOnboardingSeen() {
+  localStorage.setItem(ONBOARDING_SEEN_KEY, '1')
 }
 
 /** Save state to Supabase. Returns true on success. */

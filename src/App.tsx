@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
+import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, hasSeenOnboarding, markOnboardingSeen, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
 import { supabase } from './supabaseClient'
 import type { GalaxyState, Glob, Cluster } from './types'
 import type { User } from '@supabase/supabase-js'
@@ -56,8 +56,11 @@ export default function App() {
   const [showSaved, setShowSaved] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [seenOnboarding, setSeenOnboarding] = useState<boolean>(hasSeenOnboarding)
   const remoteSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const needsRemoteSave = useRef(false)
+  const isGalaxyEmpty = state.globs.length === 0 && state.clusters.length === 0 && state.connections.length === 0
+  const onboardingActive = isGalaxyEmpty && !seenOnboarding
 
   // Auth state
   useEffect(() => {
@@ -191,27 +194,47 @@ export default function App() {
   // Focus input on load
   useEffect(() => { inputRef.current?.focus() }, [])
 
-  const refocusInput = useCallback(() => { inputRef.current?.focus() }, [])
+  const refocusInput = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement
+    if (target.closest('.cluster, .glob, .ctx-menu, .trash-toast, .shake-modal, .help-trigger, .search-modal, .new-glob-input, .onboarding-panel, .cluster-tools, .cluster-browser')) {
+      return
+    }
+    inputRef.current?.focus()
+  }, [])
+
+  const finishOnboarding = useCallback(() => {
+    setSeenOnboarding(prev => {
+      if (prev) return prev
+      markOnboardingSeen()
+      return true
+    })
+  }, [])
 
   // ── Tracked actions (create undo snapshots) ──────────
 
+  useEffect(() => {
+    if (!seenOnboarding && !isGalaxyEmpty) finishOnboarding()
+  }, [finishOnboarding, isGalaxyEmpty, seenOnboarding])
+
   const addGlob = useCallback((text: string) => {
     if (!text.trim()) return
+    if (onboardingActive) finishOnboarding()
     const cx = window.innerWidth / 2
     const cy = window.innerHeight / 2
     setState(prev => ({
       ...prev,
       globs: [...prev.globs, makeGlob(text.trim(), cx, cy)],
     }))
-  }, [setState])
+  }, [finishOnboarding, onboardingActive, setState])
 
   const addGlobAt = useCallback((text: string, x: number, y: number) => {
     if (!text.trim()) return
+    if (onboardingActive) finishOnboarding()
     setState(prev => ({
       ...prev,
       globs: [...prev.globs, makeGlob(text.trim(), x, y)],
     }))
-  }, [setState])
+  }, [finishOnboarding, onboardingActive, setState])
 
   const deleteGlob = useCallback((id: string) => {
     setState(prev => ({
@@ -306,6 +329,45 @@ export default function App() {
           : c
       ),
     }))
+  }, [setState])
+
+  const moveGlobToCluster = useCallback((globId: string, targetClusterId: string, beforeGlobId?: string | null) => {
+    setState(prev => {
+      const glob = prev.globs.find(g => g.id === globId)
+      const targetCluster = prev.clusters.find(c => c.id === targetClusterId)
+      if (!glob || !targetCluster) return prev
+
+      const sourceClusterId = glob.clusterId
+      const nextClusters = prev.clusters.map(cluster => {
+        if (cluster.id === targetClusterId) {
+          const filtered = cluster.globIds.filter(id => id !== globId)
+          const insertAt = beforeGlobId ? filtered.indexOf(beforeGlobId) : -1
+          const nextGlobIds = [...filtered]
+          if (insertAt >= 0) {
+            nextGlobIds.splice(insertAt, 0, globId)
+          } else {
+            nextGlobIds.push(globId)
+          }
+          return { ...cluster, globIds: nextGlobIds, lastInteraction: Date.now() }
+        }
+
+        if (cluster.id === sourceClusterId) {
+          return {
+            ...cluster,
+            globIds: cluster.globIds.filter(id => id !== globId),
+            lastInteraction: Date.now(),
+          }
+        }
+
+        return cluster
+      })
+
+      return {
+        ...prev,
+        globs: prev.globs.map(g => g.id === globId ? { ...g, clusterId: targetClusterId } : g),
+        clusters: nextClusters,
+      }
+    })
   }, [setState])
 
   const addGlobToCluster = useCallback((text: string, clusterId: string) => {
@@ -482,13 +544,14 @@ export default function App() {
           alert('Invalid backup file — missing globs/clusters/connections.')
           return
         }
+        finishOnboarding()
         setState(() => incoming as GalaxyState)
       } catch {
         alert('Could not parse backup file.')
       }
     }
     reader.readAsText(file)
-  }, [setState])
+  }, [finishOnboarding, setState])
 
   const mergeClusters = useCallback((c1Id: string, c2Id: string, newName: string) => {
     setState(prev => {
@@ -597,6 +660,8 @@ export default function App() {
 
       <Galaxy
         state={state}
+        showOnboarding={onboardingActive}
+        onDismissOnboarding={finishOnboarding}
         updateGlobs={updateGlobs}
         updateState={updateState}
         onAddGlobAt={addGlobAt}
@@ -610,6 +675,7 @@ export default function App() {
         onCreateCluster={createCluster}
         onConvertToCluster={convertToCluster}
         onAddToCluster={addToCluster}
+        onMoveGlobToCluster={moveGlobToCluster}
         onAddGlobToCluster={addGlobToCluster}
         onRemoveFromCluster={removeFromCluster}
         onRenameCluster={renameCluster}
@@ -635,7 +701,7 @@ export default function App() {
             ref={inputRef}
             type="text"
             className="capture-input"
-            placeholder="brain dump here... hit enter to launch"
+            placeholder={onboardingActive ? 'start here... type one thought and hit enter' : 'brain dump here... hit enter to launch'}
             onKeyDown={handleKeyDown}
             onClick={e => e.stopPropagation()}
             autoFocus

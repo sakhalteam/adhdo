@@ -3,6 +3,8 @@ import type { Glob, Cluster, GalaxyState } from './types'
 
 interface Props {
   state: GalaxyState
+  showOnboarding: boolean
+  onDismissOnboarding: () => void
   updateGlobs: (fn: (globs: Glob[]) => Glob[]) => void
   updateState: (fn: (s: GalaxyState) => GalaxyState) => void
   onAddGlobAt: (text: string, x: number, y: number) => void
@@ -16,6 +18,7 @@ interface Props {
   onCreateCluster: (id1: string, id2: string, x: number, y: number) => void
   onConvertToCluster: (globId: string) => void
   onAddToCluster: (globId: string, clusterId: string) => void
+  onMoveGlobToCluster: (globId: string, targetClusterId: string, beforeGlobId?: string | null) => void
   onAddGlobToCluster: (text: string, clusterId: string) => void
   onRemoveFromCluster: (globId: string) => void
   onRenameCluster: (id: string, name: string) => void
@@ -45,10 +48,12 @@ const CLUSTER_SPEED = 0.04   // much slower than globs
 const CLUSTER_DAMPING = 0.999
 
 export default function Galaxy({
+  showOnboarding,
+  onDismissOnboarding,
   state, updateGlobs, updateState,
   onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleDone,
   onDuplicate, onUpdatePos,
-  onCreateCluster, onConvertToCluster, onAddToCluster, onAddGlobToCluster, onRemoveFromCluster,
+  onCreateCluster, onConvertToCluster, onAddToCluster, onMoveGlobToCluster, onAddGlobToCluster, onRemoveFromCluster,
   onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
   onRecolor,
@@ -66,7 +71,7 @@ export default function Galaxy({
   const [dissolveConfirm, setDissolveConfirm] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingClusterId, setEditingClusterId] = useState<string | null>(null)
-  const [dragReorder, setDragReorder] = useState<{ clusterId: string; globId: string; overGlobId: string | null } | null>(null)
+  const [dragReorder, setDragReorder] = useState<{ clusterId: string; globId: string; overClusterId: string | null; overGlobId: string | null } | null>(null)
   const [newGlobPos, setNewGlobPos] = useState<{ x: number; y: number } | null>(null)
   const [draggingFreeGlob, setDraggingFreeGlob] = useState(false)
   const [trashConfirm, setTrashConfirm] = useState<string | null>(null)
@@ -80,6 +85,9 @@ export default function Galaxy({
   const [flashConnection, setFlashConnection] = useState<string | null>(null)
   const [lastGlobPrompt, setLastGlobPrompt] = useState<{ globId: string; clusterId: string; x: number; y: number } | null>(null)
   const [addingToClusterId, setAddingToClusterId] = useState<string | null>(null)
+  const clusterClickStart = useRef<{ x: number; y: number } | null>(null)
+  const [focusedClusterId, setFocusedClusterId] = useState<string | null>(null)
+  const [clusterBrowserOpen, setClusterBrowserOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [helpPinned, setHelpPinned] = useState(false)
   const [clearConfirm, setClearConfirm] = useState(false)
@@ -87,6 +95,15 @@ export default function Galaxy({
   const [searchQ, setSearchQ] = useState('')
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const dragHandledRef = useRef(false)
+
+  const disconnectConnectionFromAltClick = useCallback((e: React.MouseEvent<SVGGElement>, connectionId: string) => {
+    if (!e.altKey) return
+    e.preventDefault()
+    e.stopPropagation()
+    onDisconnectClusters(connectionId)
+    setHoveredConnection(prev => (prev === connectionId ? null : prev))
+  }, [onDisconnectClusters])
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
@@ -97,6 +114,133 @@ export default function Galaxy({
     const t = setTimeout(() => setHighlightId(null), 2200)
     return () => clearTimeout(t)
   }, [highlightId])
+
+  useEffect(() => {
+    if (focusedClusterId && !clusters.some(c => c.id === focusedClusterId)) {
+      setFocusedClusterId(null)
+    }
+  }, [clusters, focusedClusterId])
+
+  const getClusterSize = useCallback((clusterId: string) => {
+    const el = document.querySelector(`.cluster[data-cluster-id="${clusterId}"]`) as HTMLElement | null
+    return {
+      width: el?.offsetWidth ?? 240,
+      height: el?.offsetHeight ?? 132,
+    }
+  }, [])
+
+  const centerCluster = useCallback((clusterId: string) => {
+    updateState(prev => {
+      const viewportWidth = window.innerWidth
+      const viewportHeight = window.innerHeight
+      const spotlightPadding = 26
+      const targetSize = getClusterSize(clusterId)
+
+      const clampPosition = (x: number, y: number, width: number, height: number) => ({
+        x: Math.min(Math.max(x, width / 2 + 18), Math.max(width / 2 + 18, viewportWidth - width / 2 - 18)),
+        y: Math.min(Math.max(y, height / 2 + 18), Math.max(height / 2 + 18, viewportHeight - height / 2 - 92)),
+      })
+
+      const spotlightY = Math.min(
+        Math.max(viewportHeight * 0.38, 24 + targetSize.height / 2),
+        viewportHeight - 110 - targetSize.height / 2,
+      )
+
+      const nextClusters = prev.clusters.map(cluster => ({ ...cluster, vx: 0, vy: 0 }))
+      const targetIndex = nextClusters.findIndex(cluster => cluster.id === clusterId)
+      if (targetIndex === -1) return prev
+
+      const targetPos = clampPosition(viewportWidth / 2, spotlightY, targetSize.width, targetSize.height)
+      nextClusters[targetIndex] = {
+        ...nextClusters[targetIndex],
+        x: targetPos.x,
+        y: targetPos.y,
+        lastInteraction: Date.now(),
+      }
+
+      const protectedIds = new Set<string>([clusterId])
+
+      for (let iteration = 0; iteration < 10; iteration++) {
+        let changed = false
+
+        for (let i = 0; i < nextClusters.length; i++) {
+          for (let j = i + 1; j < nextClusters.length; j++) {
+            const a = nextClusters[i]
+            const b = nextClusters[j]
+            const aSize = getClusterSize(a.id)
+            const bSize = getClusterSize(b.id)
+
+            const dx = b.x - a.x
+            const dy = b.y - a.y
+            const overlapX = aSize.width / 2 + bSize.width / 2 + spotlightPadding - Math.abs(dx)
+            const overlapY = aSize.height / 2 + bSize.height / 2 + spotlightPadding - Math.abs(dy)
+            if (overlapX <= 0 || overlapY <= 0) continue
+
+            const moveIndex =
+              protectedIds.has(a.id) && !protectedIds.has(b.id) ? j :
+              protectedIds.has(b.id) && !protectedIds.has(a.id) ? i :
+              j
+
+            const fixed = moveIndex === i ? b : a
+            const moving = nextClusters[moveIndex]
+            const movingSize = getClusterSize(moving.id)
+            let nextX = moving.x
+            let nextY = moving.y
+
+            if (overlapX < overlapY) {
+              const direction = ((moving.x - fixed.x) || (moveIndex === j ? 1 : -1)) >= 0 ? 1 : -1
+              nextX += direction * (overlapX + 12)
+            } else {
+              const direction = ((moving.y - fixed.y) || 1) >= 0 ? 1 : -1
+              nextY += direction * (overlapY + 12)
+            }
+
+            const clamped = clampPosition(nextX, nextY, movingSize.width, movingSize.height)
+            if (clamped.x !== moving.x || clamped.y !== moving.y) {
+              nextClusters[moveIndex] = {
+                ...moving,
+                x: clamped.x,
+                y: clamped.y,
+                lastInteraction: Date.now(),
+              }
+              changed = true
+            }
+          }
+        }
+
+        if (!changed) break
+      }
+
+      return { ...prev, clusters: nextClusters }
+    })
+
+    setHighlightId(clusterId)
+  }, [getClusterSize, updateState])
+
+  const focusCluster = useCallback((clusterId: string, options?: { center?: boolean; pulse?: boolean }) => {
+    setFocusedClusterId(clusterId)
+    onTouchCluster(clusterId)
+    if (options?.center) centerCluster(clusterId)
+    if (options?.pulse !== false) setHighlightId(clusterId)
+    setClusterBrowserOpen(false)
+  }, [centerCluster, onTouchCluster])
+
+  const rescueClustersIntoView = useCallback(() => {
+    updateState(prev => ({
+      ...prev,
+      clusters: prev.clusters.map(cluster => {
+        const { width, height } = getClusterSize(cluster.id)
+        const minX = width / 2 + 18
+        const maxX = window.innerWidth - width / 2 - 18
+        const minY = height / 2 + 18
+        const maxY = window.innerHeight - height / 2 - 92
+
+        const nextX = Math.min(Math.max(cluster.x, minX), Math.max(minX, maxX))
+        const nextY = Math.min(Math.max(cluster.y, minY), Math.max(minY, maxY))
+        return { ...cluster, x: nextX, y: nextY, vx: 0, vy: 0, lastInteraction: Date.now() }
+      }),
+    }))
+  }, [getClusterSize, updateState])
 
   const searchResults = (() => {
     const q = searchQ.trim().toLowerCase()
@@ -117,11 +261,18 @@ export default function Galaxy({
   })()
 
   const jumpToResult = (r: { type: 'glob' | 'cluster'; id: string }) => {
+    if (r.type === 'cluster') {
+      focusCluster(r.id, { center: true })
+      setSearchOpen(false)
+      setSearchQ('')
+      return
+    }
     if (r.type === 'glob') {
       const g = globs.find(gl => gl.id === r.id)
       if (g?.clusterId) {
         const parent = clusters.find(c => c.id === g.clusterId)
         if (parent?.collapsed) onToggleClusterCollapse(parent.id)
+        if (parent) focusCluster(parent.id, { center: true, pulse: false })
       }
     }
     setHighlightId(r.id)
@@ -247,6 +398,7 @@ export default function Galaxy({
       onTouchCluster(id)
       setDraggingClusterId(id)
       shakeHistory.current = [{ x: e.clientX, y: e.clientY, t: Date.now() }]
+      clusterClickStart.current = { x: e.clientX, y: e.clientY }
     }
     if (type === 'glob') {
       const g = globs.find(g => g.id === id)
@@ -310,13 +462,38 @@ export default function Galaxy({
       }
       if (dragging.current?.type === 'cluster') {
         const cid = dragging.current.id
-        // Alt+drag severs all connections
-        if (ev.altKey) {
+        const start = clusterClickStart.current
+        const moved = start ? Math.hypot(ev.clientX - start.x, ev.clientY - start.y) : 0
+
+        // Alt+drag severs all connections from the dragged cluster.
+        if (ev.altKey && moved >= 5) {
           connectionsRef.current.forEach(cn => {
             if (cn.cluster1Id === cid || cn.cluster2Id === cid) {
               onDisconnectClusters(cn.id)
             }
           })
+          dragging.current = null
+          shakeHistory.current = []
+          clusterClickStart.current = null
+          setDraggingFreeGlob(false)
+          setDraggingClusterId(null)
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          return
+        }
+        // Click (no drag) → open add-input
+        if (start && !ev.altKey) {
+          if (moved < 5) {
+            dragging.current = null
+            shakeHistory.current = []
+            clusterClickStart.current = null
+            setDraggingFreeGlob(false)
+            setDraggingClusterId(null)
+            setAddingToClusterId(cid)
+            window.removeEventListener('pointermove', onMove)
+            window.removeEventListener('pointerup', onUp)
+            return
+          }
         }
         // Check if dropped on trash zone (bottom-right corner)
         const w = window.innerWidth
@@ -351,6 +528,7 @@ export default function Galaxy({
       }
       dragging.current = null
       shakeHistory.current = []
+      clusterClickStart.current = null
       setDraggingFreeGlob(false)
       setDraggingClusterId(null)
       window.removeEventListener('pointermove', onMove)
@@ -359,7 +537,7 @@ export default function Galaxy({
 
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-  }, [onUpdatePos, onUpdateClusterPos, onTouchCluster, globs])
+  }, [onDisconnectClusters, onUpdatePos, onUpdateClusterPos, onTouchCluster, globs])
 
   // Drop handler ref (always fresh)
   handleDropRef.current = (globId: string, dropX: number, dropY: number) => {
@@ -408,7 +586,7 @@ export default function Galaxy({
   }, [])
 
   useEffect(() => {
-    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null); setHelpPinned(false); setHelpOpen(false) }
+    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null); setHelpPinned(false); setHelpOpen(false); setClusterBrowserOpen(false) }
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       const active = document.activeElement as HTMLElement | null
@@ -425,6 +603,7 @@ export default function Galaxy({
       setNewGlobPos(null)
       setSearchOpen(false)
       setSearchQ('')
+      setFocusedClusterId(null)
     }
     const onSearch = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -445,15 +624,33 @@ export default function Galaxy({
 
   // Drag reorder within clusters
   const onReorderDragStart = useCallback((clusterId: string, globId: string) => {
-    setDragReorder({ clusterId, globId, overGlobId: null })
+    dragHandledRef.current = false
+    setDragReorder({ clusterId, globId, overClusterId: clusterId, overGlobId: null })
   }, [])
 
-  const onReorderDragOver = useCallback((globId: string) => {
-    setDragReorder(prev => prev ? { ...prev, overGlobId: globId } : null)
+  const onReorderDragOver = useCallback((clusterId: string, overGlobId: string | null) => {
+    setDragReorder(prev => prev ? { ...prev, overClusterId: clusterId, overGlobId } : null)
   }, [])
 
   const onReorderDrop = useCallback(() => {
-    if (!dragReorder || !dragReorder.overGlobId) { setDragReorder(null); return }
+    if (!dragReorder || !dragReorder.overClusterId) { setDragReorder(null); return }
+    dragHandledRef.current = true
+
+    if (dragReorder.overClusterId !== dragReorder.clusterId) {
+      onMoveGlobToCluster(dragReorder.globId, dragReorder.overClusterId, dragReorder.overGlobId)
+      setDragReorder(null)
+      return
+    }
+
+    if (!dragReorder.overGlobId) {
+      const cluster = clusters.find(c => c.id === dragReorder.clusterId)
+      if (!cluster) { setDragReorder(null); return }
+      const ids = cluster.globIds.filter(id => id !== dragReorder.globId)
+      ids.push(dragReorder.globId)
+      onReorderClusterGlobs(dragReorder.clusterId, ids)
+      setDragReorder(null)
+      return
+    }
     const cluster = clusters.find(c => c.id === dragReorder.clusterId)
     if (!cluster) { setDragReorder(null); return }
 
@@ -466,19 +663,36 @@ export default function Galaxy({
     ids.splice(toIdx, 0, dragReorder.globId)
     onReorderClusterGlobs(dragReorder.clusterId, ids)
     setDragReorder(null)
-  }, [dragReorder, clusters, onReorderClusterGlobs])
+  }, [dragReorder, clusters, onMoveGlobToCluster, onReorderClusterGlobs])
 
   const freeGlobs = globs.filter(g => !g.clusterId)
+  const clusterList = [...clusters].sort((a, b) => {
+    const interactionDiff = b.lastInteraction - a.lastInteraction
+    if (interactionDiff !== 0) return interactionDiff
+    return a.name.localeCompare(b.name)
+  })
   const clusterGlobs = (c: Cluster) => {
     const map = new Map(globs.map(g => [g.id, g]))
     return c.globIds.map(id => map.get(id)).filter(Boolean) as Glob[]
   }
+  const viewportW = typeof window !== 'undefined' ? window.innerWidth : 1200
+  const viewportH = typeof window !== 'undefined' ? window.innerHeight : 800
+  const onboardingGlobX = Math.min(Math.max(viewportW * 0.34, 180), viewportW - 260)
+  const onboardingGlobY = Math.min(Math.max(viewportH * 0.36, 180), viewportH - 220)
+  const onboardingClusterX = Math.min(Math.max(viewportW * 0.7, 320), viewportW - 180)
+  const onboardingClusterY = Math.min(Math.max(viewportH * 0.38, 180), viewportH - 220)
 
   return (
-    <div className="galaxy" onContextMenu={e => {
+    <div className="galaxy" onClick={e => {
+      if (e.target !== e.currentTarget && !(e.target as HTMLElement).classList.contains('galaxy')) return
+      setFocusedClusterId(null)
+      setClusterBrowserOpen(false)
+    }} onContextMenu={e => {
       // Only trigger on the galaxy background itself
       if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('galaxy')) {
         e.preventDefault()
+        setFocusedClusterId(null)
+        setClusterBrowserOpen(false)
         setContextMenu(null)
         setClusterCtx(null)
         setNewGlobPos({ x: e.clientX, y: e.clientY })
@@ -545,6 +759,7 @@ export default function Galaxy({
             <g key={cn.id}
               onPointerEnter={() => setHoveredConnection(cn.id)}
               onPointerLeave={() => setHoveredConnection(prev => prev === cn.id ? null : prev)}
+              onClick={e => disconnectConnectionFromAltClick(e, cn.id)}
               style={{ pointerEvents: 'auto' }}
             >
               {/* Fat invisible line for hover hit area */}
@@ -644,6 +859,122 @@ export default function Galaxy({
         )
       })()}
 
+      <div className="cluster-tools" onClick={e => e.stopPropagation()}>
+        <button
+          className={`cluster-tool-btn ${clusterBrowserOpen ? 'active' : ''}`}
+          onClick={() => setClusterBrowserOpen(v => !v)}
+          disabled={clusters.length === 0}
+          title="Open cluster map"
+          aria-label="Open cluster map"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="6" y1="7" x2="12" y2="4.5" />
+            <line x1="12" y1="4.5" x2="18" y2="8.5" />
+            <line x1="6" y1="7" x2="8" y2="16.5" />
+            <line x1="18" y1="8.5" x2="16" y2="17" />
+            <line x1="8" y1="16.5" x2="16" y2="17" />
+            <circle cx="6" cy="7" r="2.2" />
+            <circle cx="12" cy="4.5" r="2" />
+            <circle cx="18" cy="8.5" r="2" />
+            <circle cx="8" cy="16.5" r="2.2" />
+            <circle cx="16" cy="17" r="2.2" />
+          </svg>
+        </button>
+      </div>
+
+      {clusterBrowserOpen && (
+        <div className="cluster-browser" onClick={e => e.stopPropagation()}>
+          <div className="cluster-browser-title">cluster map</div>
+          {clusterList.length === 0 ? (
+            <div className="cluster-browser-empty">no clusters yet</div>
+          ) : (
+            <div className="cluster-browser-list">
+              {clusterList.map(cluster => (
+                <button
+                  key={cluster.id}
+                  className={`cluster-browser-item ${focusedClusterId === cluster.id ? 'active' : ''}`}
+                  onClick={() => focusCluster(cluster.id, { center: true })}
+                >
+                  <span className="cluster-browser-name">{cluster.name}</span>
+                  <span className="cluster-browser-meta">{cluster.globIds.length} items</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showOnboarding && (
+        <>
+          <div className="onboarding-panel" onClick={e => e.stopPropagation()}>
+            <div className="onboarding-eyebrow">fresh galaxy</div>
+            <div className="onboarding-title">Start with one thought.</div>
+            <p className="onboarding-copy">
+              Type in the capture bar and hit Enter. These guide-stars are just examples, and they disappear
+              forever after your first real note.
+            </p>
+            <button className="onboarding-dismiss" onClick={onDismissOnboarding}>
+              dismiss intro
+            </button>
+          </div>
+
+          <div
+            className="glob glob-ghost onboarding-ghost"
+            style={{
+              left: onboardingGlobX,
+              top: onboardingGlobY,
+              width: 120,
+              height: 120,
+              ['--glob-color' as string]: '#a78bfa',
+            }}
+            aria-hidden="true"
+          >
+            <span className="glob-text">dump a quick idea</span>
+          </div>
+
+          <div
+            className="onboarding-hint onboarding-hint-glob"
+            style={{ left: onboardingGlobX - 86, top: onboardingGlobY - 120 }}
+            aria-hidden="true"
+          >
+            Thoughts start as globs.
+          </div>
+
+          <div
+            className="cluster cluster-ghost onboarding-ghost"
+            style={{ left: onboardingClusterX, top: onboardingClusterY, borderColor: '#67e8f9' }}
+            aria-hidden="true"
+          >
+            <div className="cluster-header">
+              <span className="cluster-name">related pile</span>
+            </div>
+            <div className="cluster-globs">
+              <div className="cluster-glob-item" style={{ borderLeftColor: '#67e8f9' }}>
+                <span className="cluster-glob-text">
+                  <span className="cluster-glob-text-inner">drag a glob into me</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            className="onboarding-hint onboarding-hint-cluster"
+            style={{ left: onboardingClusterX - 98, top: onboardingClusterY - 112 }}
+            aria-hidden="true"
+          >
+            Clusters hold related notes.
+          </div>
+
+          <div className="onboarding-hint onboarding-hint-capture" aria-hidden="true">
+            Start here: type, then hit Enter.
+          </div>
+
+          <div className="onboarding-hint onboarding-hint-context" aria-hidden="true">
+            Bonus: right-click empty space to place a thought exactly where you want it.
+          </div>
+        </>
+      )}
+
       {/* Free-floating globs */}
       {freeGlobs.map(g => (
         <div
@@ -684,13 +1015,26 @@ export default function Galaxy({
       {clusters.map(c => {
         const cGlobs = clusterGlobs(c)
         const isIdle = Date.now() - c.lastInteraction > CLUSTER_IDLE_MS
+        const isFocused = focusedClusterId === c.id
         return (
           <div
             key={c.id}
-            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isIdle ? 'drifting' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''} ${highlightId === c.id ? 'highlight-pulse' : ''}`}
+            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isIdle ? 'drifting' : ''} ${isFocused ? 'focused' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''} ${highlightId === c.id ? 'highlight-pulse' : ''}`}
             data-cluster-id={c.id}
             style={{ left: c.x, top: c.y, borderColor: c.color }}
             onPointerEnter={() => onTouchCluster(c.id)}
+            onDragOver={e => {
+              if (!dragReorder) return
+              e.preventDefault()
+              e.stopPropagation()
+              onReorderDragOver(c.id, null)
+            }}
+            onDrop={e => {
+              if (!dragReorder) return
+              e.preventDefault()
+              e.stopPropagation()
+              onReorderDrop()
+            }}
             onPointerDown={e => {
               // Skip if clicking on link handle or drag handle
               if ((e.target as HTMLElement).closest('.cluster-link-handle') || (e.target as HTMLElement).closest('.cluster-drag-handle') || (e.target as HTMLElement).closest('.cluster-add-handle')) return
@@ -700,13 +1044,21 @@ export default function Galaxy({
               const inset = 8
               const nearEdge = mx < rect.left + inset || mx > rect.right - inset
                 || my < rect.top + inset || my > rect.bottom - inset
-              if (nearEdge) onPointerDown(e, c.id, 'cluster')
+              if (nearEdge) {
+                focusCluster(c.id, { pulse: false })
+                onPointerDown(e, c.id, 'cluster')
+              }
             }}
           >
+            <div className="cluster-edge-hit top" onPointerDown={e => { focusCluster(c.id, { pulse: false }); onPointerDown(e, c.id, 'cluster') }} />
+            <div className="cluster-edge-hit right" onPointerDown={e => { focusCluster(c.id, { pulse: false }); onPointerDown(e, c.id, 'cluster') }} />
+            <div className="cluster-edge-hit bottom" onPointerDown={e => { focusCluster(c.id, { pulse: false }); onPointerDown(e, c.id, 'cluster') }} />
+            <div className="cluster-edge-hit left" onPointerDown={e => { focusCluster(c.id, { pulse: false }); onPointerDown(e, c.id, 'cluster') }} />
             <div className="cluster-drag-handle"
-              onPointerDown={e => onPointerDown(e, c.id, 'cluster')}
+              onPointerDown={e => { focusCluster(c.id, { pulse: false }); onPointerDown(e, c.id, 'cluster') }}
               onContextMenu={e => {
                 e.preventDefault(); e.stopPropagation()
+                setFocusedClusterId(c.id)
                 setClusterCtx({ x: e.clientX, y: e.clientY, clusterId: c.id })
                 setContextMenu(null)
               }}
@@ -715,6 +1067,7 @@ export default function Galaxy({
               onPointerDown={e => {
                 e.stopPropagation()
                 e.preventDefault()
+                focusCluster(c.id, { pulse: false })
                 const fromId = c.id
                 setConnecting({ fromClusterId: fromId, cursorX: e.clientX, cursorY: e.clientY })
 
@@ -751,6 +1104,7 @@ export default function Galaxy({
             </div>
             <div className="cluster-header" onContextMenu={e => {
               e.preventDefault(); e.stopPropagation()
+              setFocusedClusterId(c.id)
               setClusterCtx({ x: e.clientX, y: e.clientY, clusterId: c.id })
               setContextMenu(null)
             }}>
@@ -805,10 +1159,15 @@ export default function Galaxy({
                     style={{ borderLeftColor: g.color }}
                     draggable
                     onDragStart={e => { e.stopPropagation(); onReorderDragStart(c.id, g.id); setDraggingFreeGlob(true) }}
-                    onDragOver={e => { e.preventDefault(); e.stopPropagation(); onReorderDragOver(g.id) }}
+                    onDragOver={e => { e.preventDefault(); e.stopPropagation(); onReorderDragOver(c.id, g.id) }}
                     onDrop={e => { e.preventDefault(); e.stopPropagation(); onReorderDrop() }}
                     onDragEnd={e => {
                       setDraggingFreeGlob(false)
+                      if (dragHandledRef.current) {
+                        dragHandledRef.current = false
+                        setDragReorder(null)
+                        return
+                      }
                       const { clientX: mx, clientY: my } = e
                       // Check trash drop first — bypasses the last-glob prompt
                       const w = window.innerWidth, h = window.innerHeight
@@ -896,8 +1255,13 @@ export default function Galaxy({
                   }}
                   onKeyDown={e => {
                     if (e.key === 'Enter') {
-                      if (e.currentTarget.value.trim()) onAddGlobToCluster(e.currentTarget.value, c.id)
-                      setAddingToClusterId(null)
+                      const v = e.currentTarget.value.trim()
+                      if (v) {
+                        onAddGlobToCluster(v, c.id)
+                        e.currentTarget.value = ''
+                      } else {
+                        setAddingToClusterId(null)
+                      }
                     }
                     if (e.key === 'Escape') setAddingToClusterId(null)
                   }}
@@ -908,7 +1272,7 @@ export default function Galaxy({
                 className="cluster-add-handle"
                 title="Add a note"
                 onPointerDown={e => e.stopPropagation()}
-                onClick={e => { e.stopPropagation(); setAddingToClusterId(c.id) }}
+                onClick={e => { e.stopPropagation(); setFocusedClusterId(c.id); setAddingToClusterId(c.id) }}
               >＋</button>
             )}
           </div>
@@ -1200,7 +1564,7 @@ export default function Galaxy({
               <div className="help-item"><span className="help-action">Double-click</span> a glob to edit its text</div>
               <div className="help-item"><span className="help-action">Right-click</span> a glob for more options</div>
               <div className="help-item"><span className="help-action">Click</span> a cluster title to rename it</div>
-              <div className="help-item"><span className="help-action">Drag</span> the <span className="help-mono">&#x2807;</span> handle to move a cluster</div>
+              <div className="help-item"><span className="help-action">Drag</span> a cluster border, or the <span className="help-mono">&#x2807;</span> handle, to move it</div>
               <div className="help-item"><span className="help-action">Drag</span> the chain icon to connect clusters</div>
               <div className="help-item"><span className="help-action">Hover</span> a connection line to merge or disconnect</div>
               <div className="help-item"><kbd>Alt</kbd>+drag a cluster to sever all connections</div>
@@ -1242,6 +1606,24 @@ export default function Galaxy({
             <div className="help-divider" />
             <div className="help-title help-title--danger">recovery</div>
             <div className="help-actions">
+              <button
+                className="help-action-btn"
+                onClick={() => {
+                  rescueClustersIntoView()
+                  setHelpOpen(false)
+                  setHelpPinned(false)
+                }}
+                title="Pull every cluster fully back onto the screen"
+              >
+                <svg className="help-action-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 3H5a2 2 0 0 0-2 2v4" />
+                  <path d="M15 3h4a2 2 0 0 1 2 2v4" />
+                  <path d="M21 15v4a2 2 0 0 1-2 2h-4" />
+                  <path d="M3 15v4a2 2 0 0 0 2 2h4" />
+                  <circle cx="12" cy="12" r="2.5" />
+                </svg>
+                rescue clusters
+              </button>
               <button
                 className="help-action-btn"
                 onClick={() => { onGatherFreeGlobs(); setHelpOpen(false); setHelpPinned(false) }}
