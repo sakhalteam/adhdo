@@ -242,6 +242,72 @@ export default function Galaxy({
     }))
   }, [getClusterSize, updateState])
 
+  const organizeClusters = useCallback(() => {
+    updateState(prev => {
+      if (prev.clusters.length === 0) return prev
+
+      const viewportWidth = window.innerWidth
+      const viewportHeight = window.innerHeight
+      const marginX = 40
+      const topMargin = 84
+      const bottomMargin = 118
+      const gapX = 28
+      const gapY = 28
+      const ordered = [...prev.clusters].sort((a, b) => (a.y - b.y) || (a.x - b.x) || a.name.localeCompare(b.name))
+      const sizes = new Map(ordered.map(cluster => [cluster.id, getClusterSize(cluster.id)]))
+      const maxWidth = Math.max(...ordered.map(cluster => sizes.get(cluster.id)?.width ?? 240))
+      const maxHeight = Math.max(...ordered.map(cluster => sizes.get(cluster.id)?.height ?? 132))
+      const availableWidth = Math.max(viewportWidth - marginX * 2, maxWidth)
+      const availableHeight = Math.max(viewportHeight - topMargin - bottomMargin, maxHeight)
+      const maxColumns = Math.max(1, Math.floor((availableWidth + gapX) / (maxWidth + gapX)))
+
+      let columns = maxColumns
+      for (let candidate = 1; candidate <= maxColumns; candidate++) {
+        const rows = Math.ceil(ordered.length / candidate)
+        const neededHeight = rows * maxHeight + (rows - 1) * gapY
+        if (neededHeight <= availableHeight) {
+          columns = candidate
+          break
+        }
+      }
+
+      const rows = Math.ceil(ordered.length / columns)
+      const gridWidth = columns * maxWidth + (columns - 1) * gapX
+      const gridHeight = rows * maxHeight + (rows - 1) * gapY
+      const startX = marginX + Math.max((availableWidth - gridWidth) / 2, 0) + maxWidth / 2
+      const startY = topMargin + Math.max((availableHeight - gridHeight) / 2, 0) + maxHeight / 2
+      const now = Date.now()
+
+      const nextById = new Map(ordered.map((cluster, index) => {
+        const row = Math.floor(index / columns)
+        const col = index % columns
+        const size = sizes.get(cluster.id) ?? { width: 240, height: 132 }
+        const minX = size.width / 2 + 18
+        const maxX = viewportWidth - size.width / 2 - 18
+        const minY = size.height / 2 + 18
+        const maxY = viewportHeight - size.height / 2 - 92
+        const targetX = startX + col * (maxWidth + gapX)
+        const targetY = startY + row * (maxHeight + gapY)
+
+        return [cluster.id, {
+          ...cluster,
+          x: Math.min(Math.max(targetX, minX), Math.max(minX, maxX)),
+          y: Math.min(Math.max(targetY, minY), Math.max(minY, maxY)),
+          vx: 0,
+          vy: 0,
+          lastInteraction: now,
+        }]
+      }))
+
+      return {
+        ...prev,
+        clusters: prev.clusters.map(cluster => nextById.get(cluster.id) ?? cluster),
+      }
+    })
+
+    setClusterBrowserOpen(false)
+  }, [getClusterSize, updateState])
+
   const searchResults = (() => {
     const q = searchQ.trim().toLowerCase()
     if (!q) return [] as { type: 'glob' | 'cluster'; id: string; label: string; sub?: string }[]
@@ -860,6 +926,20 @@ export default function Galaxy({
       })()}
 
       <div className="cluster-tools" onClick={e => e.stopPropagation()}>
+        <button
+          className="cluster-tool-btn"
+          onClick={organizeClusters}
+          disabled={clusters.length === 0}
+          title="Organize clusters into a neat grid"
+          aria-label="Organize clusters into a neat grid"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="4" y="4" width="6" height="6" rx="1.2" />
+            <rect x="14" y="4" width="6" height="6" rx="1.2" />
+            <rect x="4" y="14" width="6" height="6" rx="1.2" />
+            <rect x="14" y="14" width="6" height="6" rx="1.2" />
+          </svg>
+        </button>
         <button
           className={`cluster-tool-btn ${clusterBrowserOpen ? 'active' : ''}`}
           onClick={() => setClusterBrowserOpen(v => !v)}
@@ -1565,6 +1645,7 @@ export default function Galaxy({
               <div className="help-item"><span className="help-action">Right-click</span> a glob for more options</div>
               <div className="help-item"><span className="help-action">Click</span> a cluster title to rename it</div>
               <div className="help-item"><span className="help-action">Drag</span> a cluster border, or the <span className="help-mono">&#x2807;</span> handle, to move it</div>
+              <div className="help-item"><span className="help-action">Click</span> the grid icon to organize clusters</div>
               <div className="help-item"><span className="help-action">Drag</span> the chain icon to connect clusters</div>
               <div className="help-item"><span className="help-action">Hover</span> a connection line to merge or disconnect</div>
               <div className="help-item"><kbd>Alt</kbd>+drag a cluster to sever all connections</div>
