@@ -9,9 +9,17 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Supabase Auth health
+      - name: Ping Supabase
         env:
           URL: ${{ secrets.VITE_SUPABASE_URL }}
+          KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
-          curl -fsSL "$URL/auth/v1/health" > /dev/null
-          echo "pinged $URL"
+          echo "URL length: ${#URL}  KEY length: ${#KEY}"
+          for path in /auth/v1/health /rest/v1/ /rest/v1/galaxy_states?select=id&limit=1; do
+            code=$(curl -s -o /tmp/body -w "%{http_code}" \
+              -H "apikey: $KEY" \
+              -H "Authorization: Bearer $KEY" \
+              "$URL$path")
+            echo "[$code] $path"
+            head -c 200 /tmp/body; echo
+          done
