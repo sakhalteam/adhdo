@@ -15,7 +15,8 @@ jobs:
           KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
           echo "URL length: ${#URL}  KEY length: ${#KEY}"
-          for path in /auth/v1/health /rest/v1/ /rest/v1/galaxy_states?select=id&limit=1; do
+          paths=("/auth/v1/health" "/rest/v1/" "/rest/v1/galaxy_states?select=id&limit=1")
+          for path in "${paths[@]}"; do
             code=$(curl -s -o /tmp/body -w "%{http_code}" \
               -H "apikey: $KEY" \
               -H "Authorization: Bearer $KEY" \
