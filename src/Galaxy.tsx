@@ -12,6 +12,7 @@ interface Props {
   onUpdateText: (id: string, text: string) => void
   onToggleFlag: (id: string) => void
   onToggleTodo: (id: string) => void
+  onToggleAllTodosInCluster: (clusterId: string) => void
   onToggleDone: (id: string) => void
   onDuplicate: (id: string) => void
   onUpdatePos: (id: string, x: number, y: number) => void
@@ -49,7 +50,7 @@ export default function Galaxy({
   showOnboarding,
   onDismissOnboarding,
   state, updateGlobs, updateState,
-  onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleDone,
+  onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleAllTodosInCluster, onToggleDone,
   onDuplicate, onUpdatePos,
   onCreateCluster, onConvertToCluster, onAddToCluster, onMoveGlobToCluster, onAddGlobToCluster, onRemoveFromCluster,
   onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
@@ -421,6 +422,13 @@ export default function Galaxy({
     if (tag === 'INPUT' || tag === 'BUTTON') return
     // If pointer is on a draggable item, grip handle, or link handle inside a cluster, don't start cluster drag
     if (type === 'cluster' && (target.closest('.cluster-glob-grip') || target.closest('[draggable="true"]') || target.closest('.cluster-link-handle') || target.closest('.cluster-add-handle'))) return
+
+    // Ctrl/Cmd+click on a cluster (anywhere on its body) → toggle all items as todos. Suppress drag.
+    if (type === 'cluster' && (e.ctrlKey || e.metaKey)) {
+      e.stopPropagation(); e.preventDefault()
+      onToggleAllTodosInCluster(id)
+      return
+    }
 
     e.stopPropagation()
     e.preventDefault()
@@ -1133,9 +1141,25 @@ export default function Galaxy({
               e.stopPropagation()
               onReorderDrop()
             }}
+            onContextMenu={e => {
+              // Right-click anywhere on the cluster body (that isn't a glob item or input) → open cluster ctx menu.
+              const t = e.target as HTMLElement
+              if (t.closest('.cluster-glob-item') || t.tagName === 'INPUT' || t.tagName === 'BUTTON') return
+              e.preventDefault(); e.stopPropagation()
+              setFocusedClusterId(c.id)
+              setClusterCtx({ x: e.clientX, y: e.clientY, clusterId: c.id })
+              setContextMenu(null)
+            }}
             onPointerDown={e => {
-              // Skip if clicking on link handle or drag handle
-              if ((e.target as HTMLElement).closest('.cluster-link-handle') || (e.target as HTMLElement).closest('.cluster-drag-handle') || (e.target as HTMLElement).closest('.cluster-add-handle')) return
+              const t = e.target as HTMLElement
+              // Skip if clicking on link handle, drag handle, add handle, or any cluster glob item.
+              if (t.closest('.cluster-link-handle') || t.closest('.cluster-drag-handle') || t.closest('.cluster-add-handle') || t.closest('.cluster-glob-item')) return
+              // Ctrl/Cmd+click anywhere on the cluster body → bulk-toggle todos. Suppress drag.
+              if (e.ctrlKey || e.metaKey) {
+                e.stopPropagation(); e.preventDefault()
+                onToggleAllTodosInCluster(c.id)
+                return
+              }
               // Drag when clicking the cluster border area (within 8px of edge)
               const rect = e.currentTarget.getBoundingClientRect()
               const mx = e.clientX, my = e.clientY
@@ -1408,6 +1432,8 @@ export default function Galaxy({
       {clusterCtx && (() => {
         const c = clusters.find(cl => cl.id === clusterCtx.clusterId)
         if (!c) return null
+        const clusterItems = globs.filter(g => g.clusterId === c.id)
+        const allAreTodos = clusterItems.length > 0 && clusterItems.every(g => g.isTodo)
         return (
           <div
             className="ctx-menu"
@@ -1420,9 +1446,19 @@ export default function Galaxy({
             <button onClick={() => { onToggleClusterCollapse(c.id); setClusterCtx(null) }}>
               {c.collapsed ? '＋ Expand' : '－ Collapse'}
             </button>
+            <button
+              disabled={clusterItems.length === 0}
+              onClick={() => { onToggleAllTodosInCluster(c.id); setClusterCtx(null) }}
+            >
+              {allAreTodos ? '☑️ Remove all todos' : '☐ Convert all to todos'}
+              <span className="ctx-shortcut">⌃/⌘+Click</span>
+            </button>
             <hr />
-            <button className="ctx-danger" onClick={() => { onDissolveCluster(c.id); setClusterCtx(null) }}>
-              💨 Dissolve
+            <button onClick={() => { onDissolveCluster(c.id); setClusterCtx(null) }}>
+              💨 Dissolve (release globs)
+            </button>
+            <button className="ctx-danger" onClick={() => { setClusterTrashConfirm(c.id); setClusterCtx(null) }}>
+              🗑️ Delete
             </button>
           </div>
         )

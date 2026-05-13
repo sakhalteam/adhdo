@@ -922,6 +922,8 @@ body {
   transition: background 0.1s;
 }
 .ctx-menu button:hover { background: rgba(255,255,255,0.06); }
+.ctx-menu button:disabled { opacity: 0.4; cursor: default; }
+.ctx-menu button:disabled:hover { background: none; }
 .ctx-shortcut {
   margin-left: auto;
   font-size: 11px;

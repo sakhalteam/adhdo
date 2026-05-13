@@ -31,9 +31,9 @@ A personal todo/brain-dump app for Nic (who has ADHD). Floating blobby "globs" d
 - Merge (two paths, **same modal**): (a) hover tether midpoint → merge button → rename modal → combines clusters; (b) drag a cluster onto another, hold ~1.5s until target glows, release → rename modal (same as path a). Both call `mergeClusters(c1, c2, newName)`.
 - Cluster-item dragged out onto a free-floating glob → forms a new cluster from the two. If the source cluster had only that one item, the now-empty source cluster is deleted (no prompt — user already made a clear choice).
 - Drag-to-trash (bottom-right), shake-to-dissolve, drag item outside cluster to release
-- Context menus: glob (edit/flag/todo/duplicate/recolor/delete), cluster (rename/collapse/dissolve), empty space (create glob)
+- Context menus: glob (edit/flag/todo/duplicate/recolor/delete), cluster (rename/collapse/convert-all-to-todos/dissolve/delete — opens from right-click on header, drag handle, OR border; "delete" reuses the trash-drop confirm toast so user can still pick "release globs" instead), empty space (create glob)
 - Todo mode with checkboxes, done state (line-through)
-- Ctrl/Cmd+click shortcut: on a free glob → auto-clusters it + toggles todo; on a cluster item → toggles todo. Suppresses macOS native ctrl+click contextmenu so the shortcut wins.
+- Ctrl/Cmd+click shortcut: on a free glob → auto-clusters it + toggles todo; on a cluster item → toggles todo; on the cluster body (anywhere not an item) → toggles ALL items as todos (set-all semantics: if any item isn't a todo, all become todos; if all are todos, all flip back). Suppresses macOS native ctrl+click contextmenu so the shortcut wins.
 - localStorage persistence, 300ms debounced auto-save
 
 ## Design philosophy

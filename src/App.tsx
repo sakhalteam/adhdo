@@ -268,6 +268,28 @@ export default function App() {
     }))
   }, [setState])
 
+  // Set-all semantics: if any item in the cluster isn't a todo, mark all as todos.
+  // If every item is already a todo, flip all back to non-todo. Predictable two-state behavior.
+  const toggleAllTodosInCluster = useCallback((clusterId: string) => {
+    setState(prev => {
+      const cluster = prev.clusters.find(c => c.id === clusterId)
+      if (!cluster) return prev
+      const items = prev.globs.filter(g => g.clusterId === clusterId)
+      if (items.length === 0) return prev
+      const allAreTodos = items.every(g => g.isTodo)
+      const nextIsTodo = !allAreTodos
+      return {
+        ...prev,
+        globs: prev.globs.map(g =>
+          g.clusterId === clusterId ? { ...g, isTodo: nextIsTodo, done: false } : g
+        ),
+        clusters: prev.clusters.map(c =>
+          c.id === clusterId ? { ...c, lastInteraction: Date.now() } : c
+        ),
+      }
+    })
+  }, [setState])
+
   const toggleDone = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
@@ -669,6 +691,7 @@ export default function App() {
         onUpdateText={updateGlobText}
         onToggleFlag={toggleFlag}
         onToggleTodo={toggleTodo}
+        onToggleAllTodosInCluster={toggleAllTodosInCluster}
         onToggleDone={toggleDone}
         onDuplicate={duplicateGlob}
         onUpdatePos={updateGlobPos}
