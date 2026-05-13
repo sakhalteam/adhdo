@@ -33,6 +33,17 @@ A personal todo/brain-dump app for Nic (who has ADHD). Floating blobby "globs" d
 - Drag-to-trash (bottom-right), shake-to-dissolve, drag item outside cluster to release
 - Context menus: glob (edit/flag/todo/duplicate/recolor/delete), cluster (rename/collapse/convert-all-to-todos/recolor-border/recolor-all-items/dissolve/delete — opens from right-click on header, drag handle, OR border; "delete" reuses the trash-drop confirm toast so user can still pick "release globs" instead), empty space (create glob)
 - Recolor uses a swatch popover (PALETTE exported from store.ts, 6×2 grid). Glob recolor sets the glob's color. Cluster recolor border affects only the cluster's border. Cluster recolor all items repaints every item in the cluster (items keep no relation to the border).
+- **Marquee selection tool** (Adobe/Blender-style):
+  - Left-edge tool column with pointer (V) and marquee (M) buttons.
+  - `M` enters marquee mode; `V` or `Esc` exits. Clicking the buttons does the same.
+  - In marquee mode: click+drag draws a violet dashed rect. Any item whose bounding rect intersects is selected.
+  - No modifier = replace selection. **Shift+drag** = add. **Ctrl/Cmd+drag** = remove (Blender-style).
+  - Selected items get the maximalist visual: cluster-color-tinted background + cluster-color border + 5px left accent + pulsing glow (via `--cluster-color` CSS var).
+  - Right-click on any selected item (when >1 selected) opens the **bulk-action context menu**: convert all to todos / recolor all (opens swatch popover with `bulk` target) / **transfer to new cluster** (creates a fresh cluster from the selection, removing items from their source clusters) / delete all.
+  - `App.tsx` exposes the bulk primitives: `recolorGlobs`, `toggleAllTodosInGlobs`, `deleteGlobs`, `transferToNewCluster`.
+- **Cluster z-order: click-to-front like Windows.** Clusters rank by `lastInteraction` (already updated on drag/rename/edit/etc.), highest rank = highest z-index. Touching any cluster brings it to the foreground. Hover does NOT promote (would cause z-thrashing).
+- Click anywhere inside a cluster item enters edit mode (was: only the text span). Drag-and-hold still becomes a reorder/pop-out drag via HTML5 dragstart.
+- Context menus + recolor popover clamp to viewport so they never clip off-screen.
 - Todo mode with checkboxes, done state (line-through)
 - Ctrl/Cmd+click shortcut: on a free glob → auto-clusters it + toggles todo; on a cluster item → toggles todo; on the cluster body (anywhere not an item) → toggles ALL items as todos (set-all semantics: if any item isn't a todo, all become todos; if all are todos, all flip back). Suppresses macOS native ctrl+click contextmenu so the shortcut wins.
 - localStorage persistence, 300ms debounced auto-save

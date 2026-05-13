@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from 'react'
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import type { Glob, Cluster, GalaxyState } from './types'
 import { PALETTE } from './store'
 
@@ -6,6 +6,19 @@ type RecolorTarget =
   | { kind: 'glob'; id: string }
   | { kind: 'cluster-border'; id: string }
   | { kind: 'cluster-items'; id: string }
+  | { kind: 'bulk'; ids: string[] }
+
+// Ref callback: after the menu mounts at (left, top), measure it and nudge into the viewport
+// if it would clip off the right/bottom edge. Keeps a small margin from the viewport edges.
+function clampMenuToViewport(el: HTMLDivElement | null) {
+  if (!el) return
+  const margin = 8
+  const r = el.getBoundingClientRect()
+  const maxLeft = window.innerWidth - r.width - margin
+  const maxTop = window.innerHeight - r.height - margin
+  if (r.left > maxLeft) el.style.left = `${Math.max(margin, maxLeft)}px`
+  if (r.top > maxTop) el.style.top = `${Math.max(margin, maxTop)}px`
+}
 
 interface Props {
   state: GalaxyState
@@ -38,6 +51,10 @@ interface Props {
   onRecolor: (id: string, color?: string) => void
   onRecolorCluster: (id: string, color: string) => void
   onRecolorAllInCluster: (clusterId: string, color: string) => void
+  onRecolorGlobs: (ids: string[], color: string) => void
+  onToggleAllTodosInGlobs: (ids: string[]) => void
+  onDeleteGlobs: (ids: string[]) => void
+  onTransferToNewCluster: (ids: string[], name?: string) => void
   onConnectClusters: (c1Id: string, c2Id: string) => void
   onDisconnectClusters: (connectionId: string) => void
   onMergeClusters: (c1Id: string, c2Id: string, newName: string) => void
@@ -52,7 +69,7 @@ const BOUNCE = 0.6
 const REPEL_DIST = 90
 const REPEL_FORCE = 0.02
 const MIN_SPEED = 0.12
-const MERGE_HOLD_MS = 1500 // hold a cluster over another this long → target glows, release absorbs
+const MERGE_HOLD_MS = 750 // hold a cluster over another this long → target glows, release opens rename merge modal
 
 export default function Galaxy({
   showOnboarding,
@@ -63,11 +80,19 @@ export default function Galaxy({
   onCreateCluster, onConvertToCluster, onAddToCluster, onMoveGlobToCluster, onAddGlobToCluster, onRemoveFromCluster,
   onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
-  onRecolor, onRecolorCluster, onRecolorAllInCluster,
+  onRecolor, onRecolorCluster, onRecolorAllInCluster, onRecolorGlobs, onToggleAllTodosInGlobs, onDeleteGlobs, onTransferToNewCluster,
   onConnectClusters, onDisconnectClusters, onMergeClusters,
   onGatherFreeGlobs, onClearAll, onExportJSON, onImportJSON,
 }: Props) {
   const { globs, clusters, connections } = state
+  // Rank each cluster by lastInteraction. Most-recent → highest rank → highest z-index → paints on top.
+  // Means touching any cluster (drag, click, rename, etc.) brings it forward, like clicking a window in Windows.
+  const clusterZRank = useMemo(() => {
+    const sorted = [...clusters].sort((a, b) => a.lastInteraction - b.lastInteraction)
+    const m = new Map<string, number>()
+    sorted.forEach((c, i) => m.set(c.id, i))
+    return m
+  }, [clusters])
   const animRef = useRef(0)
   const dragging = useRef<{ id: string; type: 'glob' | 'cluster'; offX: number; offY: number } | null>(null)
   const handleDropRef = useRef<(globId: string, dropX: number, dropY: number) => void>(() => {})
@@ -76,6 +101,13 @@ export default function Galaxy({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; globId: string; inCluster: boolean } | null>(null)
   const [clusterCtx, setClusterCtx] = useState<{ x: number; y: number; clusterId: string } | null>(null)
   const [recolorPopover, setRecolorPopover] = useState<{ x: number; y: number; target: RecolorTarget } | null>(null)
+  // Multi-select: ids of cluster items currently in the selection. Populated by the marquee tool.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [marqueeMode, setMarqueeMode] = useState(false)
+  const [marqueeRect, setMarqueeRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  // Modifier captured at marquee dragstart: 'replace' (no mod), 'add' (shift), 'remove' (ctrl/cmd).
+  const marqueeModeRef = useRef<'replace' | 'add' | 'remove'>('replace')
+  const [bulkCtx, setBulkCtx] = useState<{ x: number; y: number } | null>(null)
   const [dissolveConfirm, setDissolveConfirm] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingClusterId, setEditingClusterId] = useState<string | null>(null)
@@ -478,25 +510,18 @@ export default function Galaxy({
       } else {
         onUpdateClusterPos(dragging.current.id, nx, ny)
 
-        // Hold-to-merge: detect by bounding-rect OVERLAP, not pointer or center containment.
-        // The cluster's center can sit well outside the visual overlap zone (e.g. when grabbed by the
-        // left-edge drag handle), so "center in target rect" misses when you drag a big cluster onto a small one.
-        // Overlap-area is symmetric and matches the user's mental model.
+        // Hold-to-merge: the cluster whose bounds contain the CURSOR is the merge candidate.
+        // (Cursor-position is the source of truth: wherever the user is pointing IS the target.)
+        // Use elementsFromPoint (plural) and walk past the dragged cluster — disabling pointer-events on
+        // the dragged cluster alone doesn't help because its `.cluster-edge-hit` children have
+        // `pointer-events: auto` and still register as targets.
         const cid = dragging.current.id
-        const draggedEl = document.querySelector(`.cluster[data-cluster-id="${cid}"]`) as HTMLElement | null
         let newHoverId: string | null = null
-        if (draggedEl) {
-          const dr = draggedEl.getBoundingClientRect()
-          let bestOverlap = 0
-          document.querySelectorAll<HTMLElement>('.cluster[data-cluster-id]').forEach(el => {
-            const id = el.dataset.clusterId
-            if (!id || id === cid) return
-            const r = el.getBoundingClientRect()
-            const w = Math.max(0, Math.min(dr.right, r.right) - Math.max(dr.left, r.left))
-            const h = Math.max(0, Math.min(dr.bottom, r.bottom) - Math.max(dr.top, r.top))
-            const area = w * h
-            if (area > bestOverlap) { bestOverlap = area; newHoverId = id }
-          })
+        for (const el of document.elementsFromPoint(ev.clientX, ev.clientY)) {
+          const clusterEl = (el as HTMLElement).closest('.cluster[data-cluster-id]') as HTMLElement | null
+          if (!clusterEl) continue
+          const id = clusterEl.dataset.clusterId
+          if (id && id !== cid) { newHoverId = id; break }
         }
 
         if (newHoverId !== mergeHoverIdRef.current) {
@@ -682,7 +707,8 @@ export default function Galaxy({
   }, [])
 
   useEffect(() => {
-    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null); setHelpPinned(false); setHelpOpen(false); setClusterBrowserOpen(false); setRecolorPopover(null) }
+    const clearSelection = () => { setSelectedIds(new Set()) }
+    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null); setHelpPinned(false); setHelpOpen(false); setClusterBrowserOpen(false); setRecolorPopover(null); setBulkCtx(null); clearSelection() }
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       const active = document.activeElement as HTMLElement | null
@@ -700,6 +726,8 @@ export default function Galaxy({
       setSearchOpen(false)
       setSearchQ('')
       setFocusedClusterId(null)
+      setMarqueeMode(false)
+      setMarqueeRect(null)
     }
     const onSearch = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -708,13 +736,24 @@ export default function Galaxy({
         setSearchQ('')
       }
     }
+    // M / V mode shortcuts (Adobe-style). Skip when typing in an input/textarea/contentEditable.
+    const onModeKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const active = document.activeElement as HTMLElement | null
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return
+      const k = e.key.toLowerCase()
+      if (k === 'm') { setMarqueeMode(true); setMarqueeRect(null) }
+      else if (k === 'v') { setMarqueeMode(false); setMarqueeRect(null) }
+    }
     window.addEventListener('click', close)
     window.addEventListener('keydown', onEsc)
     window.addEventListener('keydown', onSearch)
+    window.addEventListener('keydown', onModeKey)
     return () => {
       window.removeEventListener('click', close)
       window.removeEventListener('keydown', onEsc)
       window.removeEventListener('keydown', onSearch)
+      window.removeEventListener('keydown', onModeKey)
     }
   }, [])
 
@@ -955,6 +994,107 @@ export default function Galaxy({
         )
       })()}
 
+      {/* Marquee tool overlay: captures pointer events when active, draws the selection rect, intersects items on release. */}
+      {marqueeMode && (
+        <div
+          className="marquee-overlay"
+          onClick={e => e.stopPropagation()}
+          onContextMenu={e => {
+            // While in marquee mode, the overlay blocks events from reaching items. Synthesize the
+            // bulk-context-menu when right-clicking over a currently-selected item.
+            e.preventDefault(); e.stopPropagation()
+            if (selectedIds.size < 2) return
+            for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
+              const item = (el as HTMLElement).closest('[data-glob-id]') as HTMLElement | null
+              if (!item) continue
+              const id = item.dataset.globId
+              if (id && selectedIds.has(id)) {
+                setBulkCtx({ x: e.clientX, y: e.clientY })
+                return
+              }
+            }
+          }}
+          onPointerDown={e => {
+            e.preventDefault()
+            e.stopPropagation()
+            ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+            // Capture modifier at dragstart — release-time modifier state can vary.
+            marqueeModeRef.current = (e.ctrlKey || e.metaKey) ? 'remove' : e.shiftKey ? 'add' : 'replace'
+            const startX = e.clientX, startY = e.clientY
+            setMarqueeRect({ x1: startX, y1: startY, x2: startX, y2: startY })
+          }}
+          onPointerMove={e => {
+            if (!marqueeRect) return
+            setMarqueeRect(r => r ? { ...r, x2: e.clientX, y2: e.clientY } : null)
+          }}
+          onPointerUp={e => {
+            if (!marqueeRect) return
+            ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+            // Click without meaningful drag → leave selection alone (don't zero it out).
+            if (Math.abs(marqueeRect.x2 - marqueeRect.x1) < 3 && Math.abs(marqueeRect.y2 - marqueeRect.y1) < 3) {
+              setMarqueeRect(null)
+              return
+            }
+            const left = Math.min(marqueeRect.x1, marqueeRect.x2)
+            const right = Math.max(marqueeRect.x1, marqueeRect.x2)
+            const top = Math.min(marqueeRect.y1, marqueeRect.y2)
+            const bottom = Math.max(marqueeRect.y1, marqueeRect.y2)
+            const inRect = new Set<string>()
+            document.querySelectorAll<HTMLElement>('[data-glob-id]').forEach(el => {
+              const id = el.dataset.globId
+              if (!id) return
+              const r = el.getBoundingClientRect()
+              if (r.right >= left && r.left <= right && r.bottom >= top && r.top <= bottom) {
+                inRect.add(id)
+              }
+            })
+            const mode = marqueeModeRef.current
+            setSelectedIds(prev => {
+              if (mode === 'add') return new Set([...prev, ...inRect])
+              if (mode === 'remove') { const next = new Set(prev); inRect.forEach(id => next.delete(id)); return next }
+              return inRect
+            })
+            setMarqueeRect(null)
+          }}
+        >
+          {marqueeRect && (
+            <div
+              className="marquee-rect"
+              style={{
+                left: Math.min(marqueeRect.x1, marqueeRect.x2),
+                top: Math.min(marqueeRect.y1, marqueeRect.y2),
+                width: Math.abs(marqueeRect.x2 - marqueeRect.x1),
+                height: Math.abs(marqueeRect.y2 - marqueeRect.y1),
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Mode selector (left side) — Adobe/Blender-style tool column: pointer vs marquee. */}
+      <div className="mode-tools" onClick={e => e.stopPropagation()}>
+        <button
+          className={`cluster-tool-btn ${!marqueeMode ? 'active' : ''}`}
+          onClick={() => { setMarqueeMode(false); setMarqueeRect(null) }}
+          title="Pointer mode (V)"
+          aria-label="Pointer mode"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M5 3l6 16 2-7 7-2z" />
+          </svg>
+        </button>
+        <button
+          className={`cluster-tool-btn ${marqueeMode ? 'active' : ''}`}
+          onClick={() => { setMarqueeMode(true); setMarqueeRect(null) }}
+          title="Marquee select (M) — click and drag to select; Shift+drag adds, Ctrl+drag removes"
+          aria-label="Marquee select tool"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="1" strokeDasharray="3 3" />
+          </svg>
+        </button>
+      </div>
+
       <div className="cluster-tools" onClick={e => e.stopPropagation()}>
         <button
           className="cluster-tool-btn"
@@ -1131,13 +1271,14 @@ export default function Galaxy({
         const cGlobs = clusterGlobs(c)
         const isFocused = focusedClusterId === c.id
         const isMergeTarget = mergeHoverTargetId === c.id
+        // Click-to-front: rank clusters by lastInteraction so the most recently-touched cluster paints on top.
+        const zRank = 20 + clusterZRank.get(c.id)!
         return (
           <div
             key={c.id}
-            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isFocused ? 'focused' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''} ${highlightId === c.id ? 'highlight-pulse' : ''} ${isMergeTarget ? 'merge-target' : ''}`}
+            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isFocused ? 'focused' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''} ${highlightId === c.id ? 'highlight-pulse' : ''} ${isMergeTarget ? 'merge-target' : ''} ${addingToClusterId === c.id ? 'adding-active' : ''}`}
             data-cluster-id={c.id}
-            style={{ left: c.x, top: c.y, borderColor: c.color }}
-            onPointerEnter={() => onTouchCluster(c.id)}
+            style={{ left: c.x, top: c.y, borderColor: c.color, ['--cluster-color' as string]: c.color, zIndex: zRank }}
             onDragOver={e => {
               if (!dragReorder) return
               e.preventDefault()
@@ -1286,13 +1427,25 @@ export default function Galaxy({
                 {cGlobs.map(g => (
                   <div
                     key={g.id}
-                    className={`cluster-glob-item ${g.flagged ? 'flagged' : ''} ${g.done ? 'done' : ''} ${dragReorder?.overGlobId === g.id ? 'drag-over' : ''} ${highlightId === g.id ? 'highlight-pulse' : ''}`}
+                    className={`cluster-glob-item ${g.flagged ? 'flagged' : ''} ${g.done ? 'done' : ''} ${dragReorder?.overGlobId === g.id ? 'drag-over' : ''} ${highlightId === g.id ? 'highlight-pulse' : ''} ${selectedIds.has(g.id) ? 'selected' : ''}`}
                     style={{ borderLeftColor: g.color }}
+                    data-glob-id={g.id}
                     draggable={editingId !== g.id}
                     onClick={e => {
+                      // Don't hijack clicks on the todo checkbox or grip.
+                      const t = e.target as HTMLElement
+                      if (t.closest('.todo-check') || t.closest('.cluster-glob-grip')) return
                       if (e.ctrlKey || e.metaKey) {
                         e.stopPropagation(); e.preventDefault()
                         onToggleTodo(g.id)
+                        return
+                      }
+                      // Plain click anywhere on the item enters edit mode.
+                      // (HTML5 click only fires on a true click, not a drag — so click-and-hold still
+                      // becomes a drag via the draggable=true / onDragStart path.)
+                      if (editingId !== g.id) {
+                        e.stopPropagation()
+                        setEditingId(g.id)
                       }
                     }}
                     onDragStart={e => { e.stopPropagation(); onReorderDragStart(c.id, g.id); setDraggingFreeGlob(true) }}
@@ -1350,6 +1503,13 @@ export default function Galaxy({
                     }}
                     onContextMenu={e => {
                       if (e.ctrlKey || e.metaKey) { e.preventDefault(); e.stopPropagation(); return }
+                      // Multi-select bulk menu: if this item is part of an active selection >1, show bulk actions instead of the single-item menu.
+                      if (selectedIds.size > 1 && selectedIds.has(g.id)) {
+                        e.preventDefault(); e.stopPropagation()
+                        setBulkCtx({ x: e.clientX, y: e.clientY })
+                        setContextMenu(null); setClusterCtx(null); setRecolorPopover(null)
+                        return
+                      }
                       onCtx(e, g.id, true)
                     }}
                   >
@@ -1377,14 +1537,7 @@ export default function Galaxy({
                       />
                     ) : (
                       <span className={`cluster-glob-text ${g.done ? 'line-through opacity-50' : ''}`}>
-                        <span
-                          className="cluster-glob-text-inner"
-                          onClick={e => {
-                            e.stopPropagation()
-                            if (e.ctrlKey || e.metaKey) { onToggleTodo(g.id); return }
-                            setEditingId(g.id)
-                          }}
-                        >
+                        <span className="cluster-glob-text-inner">
                           {g.flagged && <span className="flag-dot-inline" />}
                           {g.text}
                         </span>
@@ -1445,6 +1598,7 @@ export default function Galaxy({
         const allAreTodos = clusterItems.length > 0 && clusterItems.every(g => g.isTodo)
         return (
           <div
+            ref={clampMenuToViewport}
             className="ctx-menu"
             style={{ left: clusterCtx.x, top: clusterCtx.y }}
             onClick={e => e.stopPropagation()}
@@ -1488,9 +1642,52 @@ export default function Galaxy({
         )
       })()}
 
+      {/* Bulk-selection context menu (shown when right-clicking a selected item while multi-selection is active) */}
+      {bulkCtx && (() => {
+        const ids = Array.from(selectedIds)
+        const selectedGlobs = globs.filter(g => selectedIds.has(g.id))
+        const allAreTodos = selectedGlobs.length > 0 && selectedGlobs.every(g => g.isTodo)
+        return (
+          <div
+            ref={clampMenuToViewport}
+            className="ctx-menu"
+            style={{ left: bulkCtx.x, top: bulkCtx.y }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="ctx-shortcut" style={{ margin: '4px 8px 6px', opacity: 0.6 }}>
+              {ids.length} items selected
+            </div>
+            <hr />
+            <button onClick={() => { onToggleAllTodosInGlobs(ids); setBulkCtx(null) }}>
+              {allAreTodos ? '☑️ Remove all todos' : '☐ Convert all to todos'}
+            </button>
+            <button onClick={() => {
+              setRecolorPopover({ x: bulkCtx.x, y: bulkCtx.y, target: { kind: 'bulk', ids } })
+              setBulkCtx(null)
+            }}>
+              🎨 Recolor all
+            </button>
+            <button onClick={() => {
+              onTransferToNewCluster(ids)
+              setBulkCtx(null); setSelectedIds(new Set())
+            }}>
+              📦 Transfer to new cluster
+            </button>
+            <hr />
+            <button className="ctx-danger" onClick={() => {
+              onDeleteGlobs(ids)
+              setBulkCtx(null); setSelectedIds(new Set())
+            }}>
+              🗑️ Delete all
+            </button>
+          </div>
+        )
+      })()}
+
       {/* Recolor swatch popover */}
       {recolorPopover && (
         <div
+          ref={clampMenuToViewport}
           className="recolor-popover"
           style={{ left: recolorPopover.x, top: recolorPopover.y }}
           onClick={e => e.stopPropagation()}
@@ -1498,7 +1695,8 @@ export default function Galaxy({
           <div className="recolor-label">
             {recolorPopover.target.kind === 'glob' ? 'glob color'
               : recolorPopover.target.kind === 'cluster-border' ? 'cluster border'
-              : 'all items'}
+              : recolorPopover.target.kind === 'cluster-items' ? 'all items'
+              : `selection (${recolorPopover.target.ids.length})`}
           </div>
           <div className="recolor-grid">
             {PALETTE.map(color => (
@@ -1511,7 +1709,8 @@ export default function Galaxy({
                   const t = recolorPopover.target
                   if (t.kind === 'glob') onRecolor(t.id, color)
                   else if (t.kind === 'cluster-border') onRecolorCluster(t.id, color)
-                  else onRecolorAllInCluster(t.id, color)
+                  else if (t.kind === 'cluster-items') onRecolorAllInCluster(t.id, color)
+                  else onRecolorGlobs(t.ids, color)
                   setRecolorPopover(null)
                 }}
               />
@@ -1523,6 +1722,7 @@ export default function Galaxy({
       {/* Glob context menu */}
       {contextMenu && (
         <div
+          ref={clampMenuToViewport}
           className="ctx-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={e => e.stopPropagation()}
@@ -1792,7 +1992,7 @@ export default function Galaxy({
               <div className="help-item"><kbd>Alt</kbd>+drag a cluster to sever all connections</div>
               <div className="help-item"><span className="help-action">Shake</span> a cluster to dissolve it</div>
               <div className="help-item"><span className="help-action">Drag</span> a glob or cluster to the trash (bottom-right)</div>
-              <div className="help-item"><span className="help-action">Hold</span> a cluster over another (~1.5s) until it glows, then release to merge (you'll be asked for a new name)</div>
+              <div className="help-item"><span className="help-action">Hold</span> a cluster over another (~0.75s) until it glows, then release to merge (you'll be asked for a new name)</div>
               <div className="help-item"><kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo</div>
               <div className="help-item"><kbd>Ctrl</kbd>+<kbd>K</kbd> to search, <kbd>Esc</kbd> to close menus</div>
             </div>

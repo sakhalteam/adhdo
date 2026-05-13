@@ -98,8 +98,19 @@ body {
   position: fixed;
   top: 14px;
   left: 214px;
-  z-index: 120;
+  /* Above the marquee overlay (z 250) so toolbar buttons remain clickable in marquee mode. */
+  z-index: 260;
   display: flex;
+  gap: 8px;
+}
+.mode-tools {
+  position: fixed;
+  top: 50%;
+  left: 14px;
+  transform: translateY(-50%);
+  z-index: 260;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 .cluster-tool-btn {
@@ -138,6 +149,26 @@ body {
 .cluster-tool-btn svg {
   display: block;
   overflow: visible;
+}
+
+/* ── marquee selection tool ──────────────────────────── */
+.marquee-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  cursor: crosshair;
+  /* Transparent — we just want pointer capture, not a visual scrim. */
+  background: transparent;
+  /* But touch-action none so trackpad two-finger doesn't pan instead of drag. */
+  touch-action: none;
+}
+.marquee-rect {
+  position: absolute;
+  border: 1.5px dashed rgba(167, 139, 250, 0.95);
+  background: rgba(167, 139, 250, 0.08);
+  pointer-events: none;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.15), 0 0 18px rgba(167, 139, 250, 0.25);
 }
 .cluster-browser {
   position: fixed;
@@ -724,8 +755,11 @@ body {
 /* Glow when cluster is being dragged */
 .cluster.dragging-active {
   box-shadow: 0 0 20px rgba(108, 92, 231, 0.3), 0 0 40px rgba(108, 92, 231, 0.15), 0 8px 32px rgba(0,0,0,0.3);
-  border-color: rgba(108, 92, 231, 0.5) !important;
   z-index: 100;
+}
+.cluster.adding-active {
+  /* While the add-note flyout is open, raise the whole cluster so its flyout escapes other clusters' stacking contexts. */
+  z-index: 90;
 }
 
 .cluster-header {
@@ -834,6 +868,30 @@ body {
 .cluster-glob-item.drag-over {
   background: rgba(108, 92, 231, 0.1);
   border-top: 2px solid var(--accent);
+}
+.cluster-glob-item.selected {
+  /* Maximalist mode: tint + full cluster-color border + thick left-edge accent + pulsing glow. */
+  background: color-mix(in srgb, var(--cluster-color) 14%, rgba(255,255,255,0.04));
+  border: 1.5px solid var(--cluster-color);
+  border-left-width: 5px;
+  border-left-color: var(--cluster-color);
+  animation: selectedPulse 1.6s ease-in-out infinite;
+  position: relative;
+}
+@keyframes selectedPulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--cluster-color) 50%, transparent),
+      0 0 10px color-mix(in srgb, var(--cluster-color) 35%, transparent),
+      inset 4px 0 12px -2px color-mix(in srgb, var(--cluster-color) 40%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px var(--cluster-color),
+      0 0 22px color-mix(in srgb, var(--cluster-color) 65%, transparent),
+      0 0 40px color-mix(in srgb, var(--cluster-color) 35%, transparent),
+      inset 4px 0 18px -2px color-mix(in srgb, var(--cluster-color) 60%, transparent);
+  }
 }
 
 .cluster-glob-grip {

@@ -483,6 +483,79 @@ export default function App() {
     }))
   }, [setState])
 
+  // Bulk-recolor an arbitrary set of globs.
+  const recolorGlobs = useCallback((ids: string[], color: string) => {
+    const set = new Set(ids)
+    setState(prev => ({
+      ...prev,
+      globs: prev.globs.map(g => set.has(g.id) ? { ...g, color } : g),
+    }))
+  }, [setState])
+
+  // Bulk-toggle todo across an arbitrary set of globs. Set-all semantics matching the cluster-level version.
+  const toggleAllTodosInGlobs = useCallback((ids: string[]) => {
+    if (ids.length === 0) return
+    const set = new Set(ids)
+    setState(prev => {
+      const items = prev.globs.filter(g => set.has(g.id))
+      const allAreTodos = items.every(g => g.isTodo)
+      const nextIsTodo = !allAreTodos
+      return {
+        ...prev,
+        globs: prev.globs.map(g => set.has(g.id) ? { ...g, isTodo: nextIsTodo, done: false } : g),
+      }
+    })
+  }, [setState])
+
+  // Bulk-delete an arbitrary set of globs, and clean their entries out of any clusters' globIds.
+  const deleteGlobs = useCallback((ids: string[]) => {
+    if (ids.length === 0) return
+    const set = new Set(ids)
+    setState(prev => ({
+      ...prev,
+      globs: prev.globs.filter(g => !set.has(g.id)),
+      clusters: prev.clusters.map(c => ({
+        ...c,
+        globIds: c.globIds.filter(id => !set.has(id)),
+      })),
+    }))
+  }, [setState])
+
+  // Move an arbitrary set of globs into a brand-new cluster (cross-cluster transfer).
+  const transferToNewCluster = useCallback((ids: string[], name: string = 'new cluster') => {
+    if (ids.length === 0) return
+    const set = new Set(ids)
+    setState(prev => {
+      const items = prev.globs.filter(g => set.has(g.id))
+      if (items.length === 0) return prev
+      // New cluster centroid: average of source clusters' positions (fall back to item x,y if no parent).
+      const sourceClusterIds = Array.from(new Set(items.map(g => g.clusterId).filter((v): v is string => !!v)))
+      let cx = 0, cy = 0, count = 0
+      if (sourceClusterIds.length) {
+        for (const cid of sourceClusterIds) {
+          const c = prev.clusters.find(cl => cl.id === cid)
+          if (c) { cx += c.x; cy += c.y; count++ }
+        }
+      }
+      if (count === 0) {
+        for (const g of items) { cx += g.x; cy += g.y; count++ }
+      }
+      cx /= count; cy /= count
+      const cluster = makeCluster(name, cx, cy, ids)
+      return {
+        ...prev,
+        globs: prev.globs.map(g => set.has(g.id) ? { ...g, clusterId: cluster.id } : g),
+        clusters: [
+          ...prev.clusters.map(c => ({
+            ...c,
+            globIds: c.globIds.filter(id => !set.has(id)),
+          })),
+          cluster,
+        ],
+      }
+    })
+  }, [setState])
+
   const connectClusters = useCallback((c1Id: string, c2Id: string) => {
     setState(prev => {
       const exists = prev.connections.some(
@@ -727,6 +800,10 @@ export default function App() {
         onRecolor={recolorGlob}
         onRecolorCluster={recolorCluster}
         onRecolorAllInCluster={recolorAllInCluster}
+        onRecolorGlobs={recolorGlobs}
+        onToggleAllTodosInGlobs={toggleAllTodosInGlobs}
+        onDeleteGlobs={deleteGlobs}
+        onTransferToNewCluster={transferToNewCluster}
         onConnectClusters={connectClusters}
         onDisconnectClusters={disconnectClusters}
         onMergeClusters={mergeClusters}
