@@ -394,11 +394,9 @@ export default function Galaxy({
   const TRASH_SIZE = 56
   const TRASH_MARGIN = 24
 
-  // Physics loop for free globs + idle cluster drift
+  // Physics loop for free globs (clusters are anchored, no drift)
   useEffect(() => {
     function tick() {
-      const now = Date.now()
-
       // Update free globs
       updateGlobs(prev => {
         const w = window.innerWidth
