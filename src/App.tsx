@@ -673,6 +673,28 @@ export default function App() {
       const mx = (c1.x + c2.x) / 2
       const my = (c1.y + c2.y) / 2
       const merged = makeCluster(newName, mx, my, mergedGlobIds)
+
+      // Connections: preserve external links to either source cluster by redirecting them to the merged.
+      // Drop the c1↔c2 self-loop and dedupe parallel edges (e.g., A↔c1 + A↔c2 becomes one A↔merged).
+      const isMergingPair = (a: string, b: string) =>
+        (a === c1Id && b === c2Id) || (a === c2Id && b === c1Id)
+      const redirected = prev.connections
+        .filter(cn => !isMergingPair(cn.cluster1Id, cn.cluster2Id))
+        .map(cn => ({
+          ...cn,
+          cluster1Id: cn.cluster1Id === c1Id || cn.cluster1Id === c2Id ? merged.id : cn.cluster1Id,
+          cluster2Id: cn.cluster2Id === c1Id || cn.cluster2Id === c2Id ? merged.id : cn.cluster2Id,
+        }))
+      const seen = new Set<string>()
+      const dedupedConnections = redirected.filter(cn => {
+        const key = cn.cluster1Id < cn.cluster2Id
+          ? `${cn.cluster1Id}|${cn.cluster2Id}`
+          : `${cn.cluster2Id}|${cn.cluster1Id}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+
       return {
         ...prev,
         globs: prev.globs.map(g =>
@@ -684,10 +706,7 @@ export default function App() {
           ...prev.clusters.filter(c => c.id !== c1Id && c.id !== c2Id),
           merged,
         ],
-        connections: prev.connections.filter(
-          cn => cn.cluster1Id !== c1Id && cn.cluster1Id !== c2Id &&
-                cn.cluster2Id !== c1Id && cn.cluster2Id !== c2Id
-        ),
+        connections: dedupedConnections,
       }
     })
   }, [setState])

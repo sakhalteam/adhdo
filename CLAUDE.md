@@ -28,7 +28,7 @@ A personal todo/brain-dump app for Nic (who has ADHD). Floating blobby "globs" d
 - Cluster handles: move (left), link (right) — hover-reveal with 1s linger
 - Click-to-rename titles and glob text (auto-select-all)
 - Connections: drag link handle between clusters → persistent dashed tether lines
-- Merge (two paths, **same modal**): (a) hover tether midpoint → merge button → rename modal → combines clusters; (b) drag a cluster onto another, hold ~1.5s until target glows, release → rename modal (same as path a). Both call `mergeClusters(c1, c2, newName)`.
+- Merge (two paths, **same modal**): (a) hover tether midpoint → merge button → rename modal → combines clusters; (b) drag a cluster onto another, hold ~0.75s until target glows, release → rename modal (same as path a). Both call `mergeClusters(c1, c2, newName)`. **Merge preserves external connections**: links to either source cluster are redirected to the merged result; the direct c1↔c2 link (if any) is dropped to avoid a self-loop; parallel edges (e.g., A↔c1 + A↔c2) are deduped via a sorted-pair key. Connection IDs of the surviving edges are preserved.
 - Cluster-item dragged out onto a free-floating glob → forms a new cluster from the two. If the source cluster had only that one item, the now-empty source cluster is deleted (no prompt — user already made a clear choice).
 - Drag-to-trash (bottom-right), shake-to-dissolve, drag item outside cluster to release
 - Context menus: glob (edit/flag/todo/duplicate/recolor/delete), cluster (rename/collapse/convert-all-to-todos/recolor-border/recolor-all-items/dissolve/delete — opens from right-click on header, drag handle, OR border; "delete" reuses the trash-drop confirm toast so user can still pick "release globs" instead), empty space (create glob)
