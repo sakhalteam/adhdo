@@ -5,7 +5,7 @@ const STORAGE_KEY = 'adhdo-galaxy'
 const UPDATED_AT_KEY = 'adhdo-updated-at'
 const ONBOARDING_SEEN_KEY = 'adhdo-seen-onboarding-v1'
 
-const PALETTE = [
+export const PALETTE = [
   '#7c3aed', '#a78bfa', '#6366f1', '#818cf8',
   '#06b6d4', '#22d3ee', '#2dd4bf', '#34d399',
   '#8b5cf6', '#c084fc', '#67e8f9', '#a5f3fc',

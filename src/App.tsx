@@ -460,10 +460,26 @@ export default function App() {
     }))
   }, [setState])
 
-  const recolorGlob = useCallback((id: string) => {
+  const recolorGlob = useCallback((id: string, color?: string) => {
+    const next = color ?? randomColor()
     setState(prev => ({
       ...prev,
-      globs: prev.globs.map(g => g.id === id ? { ...g, color: randomColor() } : g),
+      globs: prev.globs.map(g => g.id === id ? { ...g, color: next } : g),
+    }))
+  }, [setState])
+
+  const recolorCluster = useCallback((id: string, color: string) => {
+    setState(prev => ({
+      ...prev,
+      clusters: prev.clusters.map(c => c.id === id ? { ...c, color, lastInteraction: Date.now() } : c),
+    }))
+  }, [setState])
+
+  const recolorAllInCluster = useCallback((clusterId: string, color: string) => {
+    setState(prev => ({
+      ...prev,
+      globs: prev.globs.map(g => g.clusterId === clusterId ? { ...g, color } : g),
+      clusters: prev.clusters.map(c => c.id === clusterId ? { ...c, lastInteraction: Date.now() } : c),
     }))
   }, [setState])
 
@@ -709,6 +725,8 @@ export default function App() {
         onTouchCluster={touchCluster}
         onReorderClusterGlobs={reorderClusterGlobs}
         onRecolor={recolorGlob}
+        onRecolorCluster={recolorCluster}
+        onRecolorAllInCluster={recolorAllInCluster}
         onConnectClusters={connectClusters}
         onDisconnectClusters={disconnectClusters}
         onMergeClusters={mergeClusters}

@@ -1,5 +1,11 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import type { Glob, Cluster, GalaxyState } from './types'
+import { PALETTE } from './store'
+
+type RecolorTarget =
+  | { kind: 'glob'; id: string }
+  | { kind: 'cluster-border'; id: string }
+  | { kind: 'cluster-items'; id: string }
 
 interface Props {
   state: GalaxyState
@@ -29,7 +35,9 @@ interface Props {
   onUpdateClusterPos: (id: string, x: number, y: number) => void
   onTouchCluster: (id: string) => void
   onReorderClusterGlobs: (clusterId: string, globIds: string[]) => void
-  onRecolor: (id: string) => void
+  onRecolor: (id: string, color?: string) => void
+  onRecolorCluster: (id: string, color: string) => void
+  onRecolorAllInCluster: (clusterId: string, color: string) => void
   onConnectClusters: (c1Id: string, c2Id: string) => void
   onDisconnectClusters: (connectionId: string) => void
   onMergeClusters: (c1Id: string, c2Id: string, newName: string) => void
@@ -55,7 +63,7 @@ export default function Galaxy({
   onCreateCluster, onConvertToCluster, onAddToCluster, onMoveGlobToCluster, onAddGlobToCluster, onRemoveFromCluster,
   onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
-  onRecolor,
+  onRecolor, onRecolorCluster, onRecolorAllInCluster,
   onConnectClusters, onDisconnectClusters, onMergeClusters,
   onGatherFreeGlobs, onClearAll, onExportJSON, onImportJSON,
 }: Props) {
@@ -67,6 +75,7 @@ export default function Galaxy({
   connectionsRef.current = connections
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; globId: string; inCluster: boolean } | null>(null)
   const [clusterCtx, setClusterCtx] = useState<{ x: number; y: number; clusterId: string } | null>(null)
+  const [recolorPopover, setRecolorPopover] = useState<{ x: number; y: number; target: RecolorTarget } | null>(null)
   const [dissolveConfirm, setDissolveConfirm] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingClusterId, setEditingClusterId] = useState<string | null>(null)
@@ -673,7 +682,7 @@ export default function Galaxy({
   }, [])
 
   useEffect(() => {
-    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null); setHelpPinned(false); setHelpOpen(false); setClusterBrowserOpen(false) }
+    const close = () => { setContextMenu(null); setClusterCtx(null); setDissolveConfirm(null); setHelpPinned(false); setHelpOpen(false); setClusterBrowserOpen(false); setRecolorPopover(null) }
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       const active = document.activeElement as HTMLElement | null
@@ -1453,6 +1462,21 @@ export default function Galaxy({
               {allAreTodos ? '☑️ Remove all todos' : '☐ Convert all to todos'}
               <span className="ctx-shortcut">⌃/⌘+Click</span>
             </button>
+            <button onClick={() => {
+              setRecolorPopover({ x: clusterCtx.x, y: clusterCtx.y, target: { kind: 'cluster-border', id: c.id } })
+              setClusterCtx(null)
+            }}>
+              🎨 Recolor border
+            </button>
+            <button
+              disabled={clusterItems.length === 0}
+              onClick={() => {
+                setRecolorPopover({ x: clusterCtx.x, y: clusterCtx.y, target: { kind: 'cluster-items', id: c.id } })
+                setClusterCtx(null)
+              }}
+            >
+              🎨 Recolor all items
+            </button>
             <hr />
             <button onClick={() => { onDissolveCluster(c.id); setClusterCtx(null) }}>
               💨 Dissolve (release globs)
@@ -1463,6 +1487,38 @@ export default function Galaxy({
           </div>
         )
       })()}
+
+      {/* Recolor swatch popover */}
+      {recolorPopover && (
+        <div
+          className="recolor-popover"
+          style={{ left: recolorPopover.x, top: recolorPopover.y }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="recolor-label">
+            {recolorPopover.target.kind === 'glob' ? 'glob color'
+              : recolorPopover.target.kind === 'cluster-border' ? 'cluster border'
+              : 'all items'}
+          </div>
+          <div className="recolor-grid">
+            {PALETTE.map(color => (
+              <button
+                key={color}
+                className="recolor-swatch"
+                style={{ background: color }}
+                aria-label={color}
+                onClick={() => {
+                  const t = recolorPopover.target
+                  if (t.kind === 'glob') onRecolor(t.id, color)
+                  else if (t.kind === 'cluster-border') onRecolorCluster(t.id, color)
+                  else onRecolorAllInCluster(t.id, color)
+                  setRecolorPopover(null)
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Glob context menu */}
       {contextMenu && (
@@ -1487,7 +1543,10 @@ export default function Galaxy({
           <button onClick={() => { onDuplicate(contextMenu.globId); setContextMenu(null) }}>
             📋 Duplicate
           </button>
-          <button onClick={() => { onRecolor(contextMenu.globId); setContextMenu(null) }}>
+          <button onClick={() => {
+            setRecolorPopover({ x: contextMenu.x, y: contextMenu.y, target: { kind: 'glob', id: contextMenu.globId } })
+            setContextMenu(null)
+          }}>
             🎨 Recolor
           </button>
           {!contextMenu.inCluster && (
