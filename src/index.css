@@ -550,6 +550,16 @@ body {
   box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.3), 0 0 24px rgba(108, 92, 231, 0.24), 0 10px 34px rgba(0,0,0,0.38);
   border-width: 2px;
 }
+.cluster.merge-target {
+  border-width: 3px;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.35),
+    0 0 32px 4px rgba(167, 139, 250, 0.55),
+    0 0 64px 8px rgba(108, 92, 231, 0.35),
+    0 10px 34px rgba(0,0,0,0.4);
+  filter: brightness(1.18);
+  transition: box-shadow 0.25s ease, filter 0.25s ease, border-width 0.15s ease;
+}
 
 
 .cluster-edge-hit {
@@ -715,6 +725,7 @@ body {
 .cluster.dragging-active {
   box-shadow: 0 0 20px rgba(108, 92, 231, 0.3), 0 0 40px rgba(108, 92, 231, 0.15), 0 8px 32px rgba(0,0,0,0.3);
   border-color: rgba(108, 92, 231, 0.5) !important;
+  z-index: 100;
 }
 
 .cluster-header {
@@ -911,6 +922,12 @@ body {
   transition: background 0.1s;
 }
 .ctx-menu button:hover { background: rgba(255,255,255,0.06); }
+.ctx-shortcut {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.5;
+  letter-spacing: 0.02em;
+}
 .ctx-danger { color: var(--danger) !important; }
 .ctx-danger:hover { background: rgba(239, 68, 68, 0.1) !important; }
 .ctx-menu hr {
