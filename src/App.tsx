@@ -729,9 +729,16 @@ export default function App() {
   }, [])
 
   const updateClusterPos = useCallback((id: string, x: number, y: number) => {
+    // Clamp the cluster's center to the viewport so it can't be dragged off-screen.
+    // Cluster transform is translate(-50%, -50%), so x/y IS the center.
+    // Same margins the old drift loop bounced against — keeps drag handle + link button
+    // reachable on the left, and the cluster header in view at the top.
+    const w = window.innerWidth, h = window.innerHeight
+    const cx = Math.max(100, Math.min(x, w - 100))
+    const cy = Math.max(60, Math.min(y, h - 120))
     setStateRaw(prev => ({
       ...prev,
-      clusters: prev.clusters.map(c => c.id === id ? { ...c, x, y, vx: 0, vy: 0, lastInteraction: Date.now() } : c),
+      clusters: prev.clusters.map(c => c.id === id ? { ...c, x: cx, y: cy, vx: 0, vy: 0, lastInteraction: Date.now() } : c),
     }))
   }, [])
 
