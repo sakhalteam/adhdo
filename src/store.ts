@@ -5,6 +5,15 @@ const STORAGE_KEY = 'adhdo-galaxy'
 const UPDATED_AT_KEY = 'adhdo-updated-at'
 const ONBOARDING_SEEN_KEY = 'adhdo-seen-onboarding-v1'
 
+/**
+ * 🎨 PALETTE — per-glob / per-cluster colors.
+ *
+ * These hexes are picked randomly for new globs (glob fill) and new clusters
+ * (cluster border + cluster.color). Edit, reorder, or extend freely.
+ *
+ * Semantic theme colors (accent, success, danger, etc.) live in
+ * `src/index.css` under the "🎨 DESIGN KNOBS" header at the top of the file.
+ */
 export const PALETTE = [
   '#7c3aed', '#a78bfa', '#6366f1', '#818cf8',
   '#06b6d4', '#22d3ee', '#2dd4bf', '#34d399',
