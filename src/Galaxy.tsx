@@ -1,12 +1,17 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import type { Glob, Cluster, GalaxyState } from './types'
-import { PALETTE } from './store'
-
-type RecolorTarget =
-  | { kind: 'glob'; id: string }
-  | { kind: 'cluster-border'; id: string }
-  | { kind: 'cluster-items'; id: string }
-  | { kind: 'bulk'; ids: string[] }
+import {
+  ClusterAddControl,
+  ClusterBrowser,
+  ClusterHeader,
+  ClusterTools,
+  ModeTools,
+  OnboardingLayer,
+  RecolorPopover,
+  SearchModal,
+  type RecolorTarget,
+  type SearchResult,
+} from './GalaxyChrome'
 
 // Ref callback: after the menu mounts at (left, top), measure it and nudge into the viewport
 // if it would clip off the right/bottom edge. Keeps a small margin from the viewport edges.
@@ -356,8 +361,8 @@ export default function Galaxy({
 
   const searchResults = (() => {
     const q = searchQ.trim().toLowerCase()
-    if (!q) return [] as { type: 'glob' | 'cluster'; id: string; label: string; sub?: string }[]
-    const results: { type: 'glob' | 'cluster'; id: string; label: string; sub?: string }[] = []
+    if (!q) return [] as SearchResult[]
+    const results: SearchResult[] = []
     for (const c of clusters) {
       if (c.name.toLowerCase().includes(q)) {
         results.push({ type: 'cluster', id: c.id, label: c.name, sub: `cluster · ${c.globIds.length} globs` })
@@ -372,7 +377,7 @@ export default function Galaxy({
     return results.slice(0, 30)
   })()
 
-  const jumpToResult = (r: { type: 'glob' | 'cluster'; id: string }) => {
+  const jumpToResult = (r: SearchResult) => {
     if (r.type === 'cluster') {
       focusCluster(r.id, { center: true })
       setSearchOpen(false)
@@ -1069,151 +1074,35 @@ export default function Galaxy({
         </div>
       )}
 
-      {/* Mode selector (left side) — Adobe/Blender-style tool column: pointer vs marquee. */}
-      <div className="mode-tools" onClick={e => e.stopPropagation()}>
-        <button
-          className={`cluster-tool-btn ${!marqueeMode ? 'active' : ''}`}
-          onClick={() => { setMarqueeMode(false); setMarqueeRect(null) }}
-          title="Pointer mode (V)"
-          aria-label="Pointer mode"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M5 3l6 16 2-7 7-2z" />
-          </svg>
-        </button>
-        <button
-          className={`cluster-tool-btn ${marqueeMode ? 'active' : ''}`}
-          onClick={() => { setMarqueeMode(true); setMarqueeRect(null) }}
-          title="Marquee select (M) — click and drag to select; Shift+drag adds, Ctrl+drag removes"
-          aria-label="Marquee select tool"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="3" y="3" width="18" height="18" rx="1" strokeDasharray="3 3" />
-          </svg>
-        </button>
-      </div>
+      <ModeTools
+        marqueeMode={marqueeMode}
+        onSetPointerMode={() => { setMarqueeMode(false); setMarqueeRect(null) }}
+        onSetMarqueeMode={() => { setMarqueeMode(true); setMarqueeRect(null) }}
+      />
 
-      <div className="cluster-tools" onClick={e => e.stopPropagation()}>
-        <button
-          className="cluster-tool-btn"
-          onClick={organizeClusters}
-          disabled={clusters.length === 0}
-          title="Organize clusters into a neat grid"
-          aria-label="Organize clusters into a neat grid"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="4" y="4" width="6" height="6" rx="1.2" />
-            <rect x="14" y="4" width="6" height="6" rx="1.2" />
-            <rect x="4" y="14" width="6" height="6" rx="1.2" />
-            <rect x="14" y="14" width="6" height="6" rx="1.2" />
-          </svg>
-        </button>
-        <button
-          className={`cluster-tool-btn ${clusterBrowserOpen ? 'active' : ''}`}
-          onClick={() => setClusterBrowserOpen(v => !v)}
-          disabled={clusters.length === 0}
-          title="Open cluster map"
-          aria-label="Open cluster map"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />
-            <line x1="9" y1="3" x2="9" y2="18" />
-            <line x1="15" y1="6" x2="15" y2="21" />
-          </svg>
-        </button>
-      </div>
+      <ClusterTools
+        clusterCount={clusters.length}
+        browserOpen={clusterBrowserOpen}
+        onOrganize={organizeClusters}
+        onToggleBrowser={() => setClusterBrowserOpen(v => !v)}
+      />
 
       {clusterBrowserOpen && (
-        <div className="cluster-browser" onClick={e => e.stopPropagation()}>
-          <div className="cluster-browser-title">cluster map</div>
-          {clusterList.length === 0 ? (
-            <div className="cluster-browser-empty">no clusters yet</div>
-          ) : (
-            <div className="cluster-browser-list">
-              {clusterList.map(cluster => (
-                <button
-                  key={cluster.id}
-                  className={`cluster-browser-item ${focusedClusterId === cluster.id ? 'active' : ''}`}
-                  onClick={() => focusCluster(cluster.id, { center: true })}
-                >
-                  <span className="cluster-browser-name">{cluster.name}</span>
-                  <span className="cluster-browser-meta">{cluster.globIds.length} items</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <ClusterBrowser
+          clusters={clusterList}
+          focusedClusterId={focusedClusterId}
+          onFocusCluster={clusterId => focusCluster(clusterId, { center: true })}
+        />
       )}
 
       {showOnboarding && (
-        <>
-          <div className="onboarding-panel" onClick={e => e.stopPropagation()}>
-            <div className="onboarding-eyebrow">fresh galaxy</div>
-            <div className="onboarding-title">Start with one thought.</div>
-            <p className="onboarding-copy">
-              Type in the capture bar and hit Enter. These guide-stars are just examples, and they disappear
-              forever after your first real note.
-            </p>
-            <button className="onboarding-dismiss" onClick={onDismissOnboarding}>
-              dismiss intro
-            </button>
-          </div>
-
-          <div
-            className="glob glob-ghost onboarding-ghost"
-            style={{
-              left: onboardingGlobX,
-              top: onboardingGlobY,
-              width: 120,
-              height: 120,
-              ['--glob-color' as string]: '#a78bfa',
-            }}
-            aria-hidden="true"
-          >
-            <span className="glob-text">dump a quick idea</span>
-          </div>
-
-          <div
-            className="onboarding-hint onboarding-hint-glob"
-            style={{ left: onboardingGlobX - 86, top: onboardingGlobY - 120 }}
-            aria-hidden="true"
-          >
-            Thoughts start as globs.
-          </div>
-
-          <div
-            className="cluster cluster-ghost onboarding-ghost"
-            style={{ left: onboardingClusterX, top: onboardingClusterY, borderColor: '#67e8f9' }}
-            aria-hidden="true"
-          >
-            <div className="cluster-header">
-              <span className="cluster-name">related pile</span>
-            </div>
-            <div className="cluster-globs">
-              <div className="cluster-glob-item" style={{ borderLeftColor: '#67e8f9' }}>
-                <span className="cluster-glob-text">
-                  <span className="cluster-glob-text-inner">drag a glob into me</span>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div
-            className="onboarding-hint onboarding-hint-cluster"
-            style={{ left: onboardingClusterX - 98, top: onboardingClusterY - 112 }}
-            aria-hidden="true"
-          >
-            Clusters hold related notes.
-          </div>
-
-          <div className="onboarding-hint onboarding-hint-capture" aria-hidden="true">
-            Start here: type, then hit Enter.
-          </div>
-
-          <div className="onboarding-hint onboarding-hint-context" aria-hidden="true">
-            Bonus: right-click empty space to place a thought exactly where you want it.
-          </div>
-        </>
+        <OnboardingLayer
+          globX={onboardingGlobX}
+          globY={onboardingGlobY}
+          clusterX={onboardingClusterX}
+          clusterY={onboardingClusterY}
+          onDismiss={onDismissOnboarding}
+        />
       )}
 
       {/* Free-floating globs */}
@@ -1372,49 +1261,25 @@ export default function Galaxy({
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
               </svg>
             </div>
-            <div className="cluster-header" onContextMenu={e => {
-              e.preventDefault(); e.stopPropagation()
-              setFocusedClusterId(c.id)
-              setClusterCtx({ x: e.clientX, y: e.clientY, clusterId: c.id })
-              setContextMenu(null)
-            }}>
-              {editingClusterId === c.id ? (
-                <input
-                  className="cluster-name-edit"
-                  defaultValue={c.name}
-                  autoFocus
-                  onFocus={e => e.currentTarget.select()}
-                  onClick={e => e.stopPropagation()}
-                  onBlur={e => { onRenameCluster(c.id, e.currentTarget.value); setEditingClusterId(null) }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') { onRenameCluster(c.id, e.currentTarget.value); setEditingClusterId(null) }
-                    if (e.key === 'Escape') setEditingClusterId(null)
-                  }}
-                />
-              ) : (
-                <span className="cluster-name"
-                  onClick={e => { e.stopPropagation(); setEditingClusterId(c.id) }}
-                >
-                  {c.name}
-                </span>
-              )}
-              <div className="cluster-actions">
-                <button onClick={e => { e.stopPropagation(); onToggleClusterCollapse(c.id) }}>
-                  {c.collapsed ? '＋' : '－'}
-                </button>
-                {dissolveConfirm === c.id ? (
-                  <div className="dissolve-confirm" onClick={e => e.stopPropagation()}>
-                    <span>{cGlobs.length === 0 ? 'delete cluster?' : 'release globs?'}</span>
-                    <button className="dissolve-yes" onClick={() => { onDissolveCluster(c.id); setDissolveConfirm(null) }}>yes</button>
-                    <button className="dissolve-no" onClick={() => setDissolveConfirm(null)}>no</button>
-                  </div>
-                ) : (
-                  <button onClick={e => { e.stopPropagation(); setDissolveConfirm(c.id) }} title={cGlobs.length === 0 ? 'Delete cluster' : 'Release globs'}>
-                    ✕
-                  </button>
-                )}
-              </div>
-            </div>
+            <ClusterHeader
+              cluster={c}
+              itemCount={cGlobs.length}
+              editing={editingClusterId === c.id}
+              dissolvePending={dissolveConfirm === c.id}
+              onOpenMenu={e => {
+                e.preventDefault(); e.stopPropagation()
+                setFocusedClusterId(c.id)
+                setClusterCtx({ x: e.clientX, y: e.clientY, clusterId: c.id })
+                setContextMenu(null)
+              }}
+              onStartEditing={() => setEditingClusterId(c.id)}
+              onRename={name => { onRenameCluster(c.id, name); setEditingClusterId(null) }}
+              onCancelEditing={() => setEditingClusterId(null)}
+              onToggleCollapse={() => onToggleClusterCollapse(c.id)}
+              onRequestDissolve={() => setDissolveConfirm(c.id)}
+              onConfirmDissolve={() => { onDissolveCluster(c.id); setDissolveConfirm(null) }}
+              onCancelDissolve={() => setDissolveConfirm(null)}
+            />
 
             {!c.collapsed && cGlobs.length === 0 && (
               <div className="cluster-empty">drag globs here</div>
@@ -1549,41 +1414,12 @@ export default function Galaxy({
             {c.collapsed && (
               <span className="cluster-count">{cGlobs.length === 0 ? 'empty' : `${cGlobs.length} items`}</span>
             )}
-
-            {addingToClusterId === c.id ? (
-              <div className="cluster-add-input-wrap">
-                <input
-                  className="cluster-add-input"
-                  placeholder="add a note..."
-                  autoFocus
-                  onClick={e => e.stopPropagation()}
-                  onPointerDown={e => e.stopPropagation()}
-                  onBlur={e => {
-                    if (e.currentTarget.value.trim()) onAddGlobToCluster(e.currentTarget.value, c.id)
-                    setAddingToClusterId(null)
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') {
-                      const v = e.currentTarget.value.trim()
-                      if (v) {
-                        onAddGlobToCluster(v, c.id)
-                        e.currentTarget.value = ''
-                      } else {
-                        setAddingToClusterId(null)
-                      }
-                    }
-                    if (e.key === 'Escape') setAddingToClusterId(null)
-                  }}
-                />
-              </div>
-            ) : (
-              <button
-                className="cluster-add-handle"
-                title="Add a note"
-                onPointerDown={e => e.stopPropagation()}
-                onClick={e => { e.stopPropagation(); setFocusedClusterId(c.id); setAddingToClusterId(c.id) }}
-              >＋</button>
-            )}
+            <ClusterAddControl
+              active={addingToClusterId === c.id}
+              onActivate={() => { setFocusedClusterId(c.id); setAddingToClusterId(c.id) }}
+              onAdd={text => onAddGlobToCluster(text, c.id)}
+              onCancel={() => setAddingToClusterId(null)}
+            />
           </div>
         )
       })}
@@ -1682,39 +1518,20 @@ export default function Galaxy({
         )
       })()}
 
-      {/* Recolor swatch popover */}
       {recolorPopover && (
-        <div
-          ref={clampMenuToViewport}
-          className="recolor-popover"
-          style={{ left: recolorPopover.x, top: recolorPopover.y }}
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="recolor-label">
-            {recolorPopover.target.kind === 'glob' ? 'glob color'
-              : recolorPopover.target.kind === 'cluster-border' ? 'cluster border'
-              : recolorPopover.target.kind === 'cluster-items' ? 'all items'
-              : `selection (${recolorPopover.target.ids.length})`}
-          </div>
-          <div className="recolor-grid">
-            {PALETTE.map(color => (
-              <button
-                key={color}
-                className="recolor-swatch"
-                style={{ background: color }}
-                aria-label={color}
-                onClick={() => {
-                  const t = recolorPopover.target
-                  if (t.kind === 'glob') onRecolor(t.id, color)
-                  else if (t.kind === 'cluster-border') onRecolorCluster(t.id, color)
-                  else if (t.kind === 'cluster-items') onRecolorAllInCluster(t.id, color)
-                  else onRecolorGlobs(t.ids, color)
-                  setRecolorPopover(null)
-                }}
-              />
-            ))}
-          </div>
-        </div>
+        <RecolorPopover
+          x={recolorPopover.x}
+          y={recolorPopover.y}
+          target={recolorPopover.target}
+          menuRef={clampMenuToViewport}
+          onPickColor={(color, target) => {
+            if (target.kind === 'glob') onRecolor(target.id, color)
+            else if (target.kind === 'cluster-border') onRecolorCluster(target.id, color)
+            else if (target.kind === 'cluster-items') onRecolorAllInCluster(target.id, color)
+            else onRecolorGlobs(target.ids, color)
+            setRecolorPopover(null)
+          }}
+        />
       )}
 
       {/* Glob context menu */}
@@ -2062,46 +1879,15 @@ export default function Galaxy({
           </div>
         )}
       </div>
-
       {searchOpen && (
-        <div className="search-overlay" onClick={e => { e.stopPropagation(); setSearchOpen(false); setSearchQ('') }}>
-          <div className="search-modal" onClick={e => e.stopPropagation()}>
-            <input
-              ref={searchInputRef}
-              className="search-input"
-              placeholder="search globs and clusters..."
-              value={searchQ}
-              onChange={e => setSearchQ(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && searchResults[0]) {
-                  jumpToResult(searchResults[0])
-                }
-              }}
-            />
-            {searchQ.trim() && (
-              <div className="search-results">
-                {searchResults.length === 0 ? (
-                  <div className="search-empty">no matches</div>
-                ) : (
-                  searchResults.map(r => (
-                    <button
-                      key={`${r.type}-${r.id}`}
-                      className="search-result"
-                      onClick={() => jumpToResult(r)}
-                    >
-                      <span className={`search-result-kind ${r.type}`}>{r.type}</span>
-                      <span className="search-result-label">{r.label}</span>
-                      {r.sub && <span className="search-result-sub">{r.sub}</span>}
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
-            <div className="search-hint">
-              <kbd>↵</kbd> jump to first · <kbd>Esc</kbd> close
-            </div>
-          </div>
-        </div>
+        <SearchModal
+          inputRef={searchInputRef}
+          query={searchQ}
+          results={searchResults}
+          onQueryChange={setSearchQ}
+          onJump={jumpToResult}
+          onClose={() => { setSearchOpen(false); setSearchQ('') }}
+        />
       )}
 
       {clearConfirm && (

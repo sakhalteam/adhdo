@@ -27,8 +27,8 @@
 
   /* ── semantic hues (change these to retheme everything) ── */
   --accent: #6c5ce7;          /* primary violet — interactive states, focus rings */
-  --accent-bright: var(--accent-bright);   /* lighter violet — "active" buttons, marquee, selection */
-  --accent-glow: var(--accent-glow);     /* lightest violet — pulse highlights, hover hints */
+  --accent-bright: #a78bfa;   /* lighter violet — "active" buttons, marquee, selection */
+  --accent-glow: #c4b5fd;     /* lightest violet — pulse highlights, hover hints */
   --success: #34d399;         /* green — done/checked, dissolve-yes */
   --danger: #ef4444;          /* red — delete, flagged, trash */
 
