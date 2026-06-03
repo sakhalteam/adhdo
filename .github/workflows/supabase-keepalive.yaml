@@ -9,7 +9,23 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Supabase Auth health
+      - name: Touch the database (counts as activity → prevents auto-pause)
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          # A real Postgres query is what resets the 7-day inactivity timer.
+          # The /auth/v1/health check (below) does NOT count as DB activity —
+          # the project paused 3 days after a "successful" health ping (2026-05).
+          # RLS hides other users' rows, so this returns 200 with [] — fine for -f.
+          curl -fsSL \
+            -H "apikey: $KEY" \
+            -H "Authorization: Bearer $KEY" \
+            "$URL/rest/v1/galaxy_states?select=user_id&limit=1"
+          echo
+          echo "db touched: $URL"
+
+      - name: Ping Supabase Auth health (liveness only)
         env:
           URL: ${{ secrets.VITE_SUPABASE_URL }}
           KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
@@ -19,4 +35,4 @@ jobs:
             -H "Authorization: Bearer $KEY" \
             "$URL/auth/v1/health"
           echo
-          echo "pinged $URL"
+          echo "auth healthy: $URL"
