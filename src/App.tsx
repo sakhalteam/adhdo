@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, hasSeenOnboarding, markOnboardingSeen, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
+import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, hasSeenOnboarding, markOnboardingSeen, stateSignature, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
 import { supabase } from './supabaseClient'
 import type { GalaxyState, Glob, Cluster } from './types'
 import type { User } from '@supabase/supabase-js'
@@ -8,12 +8,6 @@ import { AuthButton, CaptureBar, CloudIndicator, HomeButton, SaveIndicator, Undo
 
 const MAX_UNDO = 40
 const REMOTE_SAVE_DELAY = 5000 // 5s debounce for cloud saves
-
-/* ── HomeBtn ─────────────────────────────────────────── */
-
-/* ── AuthBtn ────────────────────────────────────────── */
-
-/* ── App ─────────────────────────────────────────────── */
 
 export default function App() {
   const [state, setStateRaw] = useState<GalaxyState>(loadLocal)
@@ -136,13 +130,15 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo])
 
-  // Auto-save locally: check every 2s if state has actually changed
+  // Auto-save locally: check every 2s if anything *meaningful* changed.
+  // Keyed off stateSignature (not the full state) so perpetual physics drift
+  // doesn't trigger a write — and the "saved" badge — every single tick.
   useEffect(() => {
     const interval = setInterval(() => {
-      const json = JSON.stringify(state)
-      if (json !== lastSavedRef.current) {
+      const sig = stateSignature(state)
+      if (sig !== lastSavedRef.current) {
         saveLocal(state)
-        lastSavedRef.current = json
+        lastSavedRef.current = sig
         setShowSaved(true)
         setTimeout(() => setShowSaved(false), 1200)
       }

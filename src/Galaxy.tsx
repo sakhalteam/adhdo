@@ -12,6 +12,8 @@ import {
   OnboardingLayer,
   type RecolorTarget,
 } from './GalaxyChrome'
+import { isOverTrash } from './trashZone'
+import { useClusterDrag } from './useClusterDrag'
 import { useClusterFocus } from './useClusterFocus'
 import { useClusterReorder } from './useClusterReorder'
 import { useFreeGlobPhysics } from './useFreeGlobPhysics'
@@ -64,8 +66,6 @@ interface Props {
   onImportJSON: (file: File) => void
 }
 
-const MERGE_HOLD_MS = 750 // hold a cluster over another this long → target glows, release opens rename merge modal
-
 export default function Galaxy({
   showOnboarding,
   onDismissOnboarding,
@@ -88,7 +88,6 @@ export default function Galaxy({
     sorted.forEach((c, i) => m.set(c.id, i))
     return m
   }, [clusters])
-  const dragging = useRef<{ id: string; type: 'glob' | 'cluster'; offX: number; offY: number } | null>(null)
   const connectionsRef = useRef(connections)
   connectionsRef.current = connections
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; globId: string; inCluster: boolean } | null>(null)
@@ -119,25 +118,15 @@ export default function Galaxy({
     onReorderDrop,
   } = useClusterReorder({ clusters, onMoveGlobToCluster, onReorderClusterGlobs })
   const [newGlobPos, setNewGlobPos] = useState<{ x: number; y: number } | null>(null)
-  const [draggingFreeGlob, setDraggingFreeGlob] = useState(false)
   const [trashConfirm, setTrashConfirm] = useState<string | null>(null)
   const [shakeDissolve, setShakeDissolve] = useState<string | null>(null)
-  const [draggingClusterId, setDraggingClusterId] = useState<string | null>(null)
   const [clusterTrashConfirm, setClusterTrashConfirm] = useState<string | null>(null)
-  // Hold-to-merge: while dragging a cluster over another, after MERGE_HOLD_MS we glow the target; release while glowing triggers absorb.
-  const [mergeHoverTargetId, setMergeHoverTargetId] = useState<string | null>(null)
-  const mergeHoverIdRef = useRef<string | null>(null)
-  const mergeHoverTimerRef = useRef<number | null>(null)
-  const mergeHoverTargetIdRef = useRef<string | null>(null)
-  mergeHoverTargetIdRef.current = mergeHoverTargetId
-  const shakeHistory = useRef<{ x: number; y: number; t: number }[]>([])
   const [connecting, setConnecting] = useState<{ fromClusterId: string; cursorX: number; cursorY: number } | null>(null)
   const [hoveredConnection, setHoveredConnection] = useState<string | null>(null)
   const [mergePrompt, setMergePrompt] = useState<{ c1Id: string; c2Id: string; connectionId: string } | null>(null)
   const [flashConnection, setFlashConnection] = useState<string | null>(null)
   const [lastGlobPrompt, setLastGlobPrompt] = useState<{ globId: string; clusterId: string; x: number; y: number } | null>(null)
   const [addingToClusterId, setAddingToClusterId] = useState<string | null>(null)
-  const clusterClickStart = useRef<{ x: number; y: number } | null>(null)
   const [clusterBrowserOpen, setClusterBrowserOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [helpPinned, setHelpPinned] = useState(false)
@@ -222,224 +211,46 @@ export default function Galaxy({
     onCloseSearch: () => { setSearchOpen(false); setSearchQ('') },
     onHighlight: setHighlightId,
   })
-  const TRASH_SIZE = 56
-  const TRASH_MARGIN = 24
   const handleDropRef = useGlobDrop({
     globs,
     clusters,
-    trashSize: TRASH_SIZE,
-    trashMargin: TRASH_MARGIN,
     onTrash: setTrashConfirm,
     onAddToCluster,
     onCreateCluster,
   })
 
-  useFreeGlobPhysics({ dragging, updateGlobs })
-
-  // Drag handlers
-  const onPointerDown = useCallback((e: React.PointerEvent, id: string, type: 'glob' | 'cluster') => {
-    // Don't drag when interacting with inputs, buttons, or draggable reorder items
-    const target = e.target as HTMLElement
-    const tag = target.tagName
-    if (tag === 'INPUT' || tag === 'BUTTON') return
-    // If pointer is on a draggable item, grip handle, or link handle inside a cluster, don't start cluster drag
-    if (type === 'cluster' && (target.closest('.cluster-glob-grip') || target.closest('[draggable="true"]') || target.closest('.cluster-link-handle') || target.closest('.cluster-add-handle'))) return
-
-    // Ctrl/Cmd+click on a cluster (anywhere on its body) → toggle all items as todos. Suppress drag.
-    if (type === 'cluster' && (e.ctrlKey || e.metaKey)) {
-      e.stopPropagation(); e.preventDefault()
-      onToggleAllTodosInCluster(id)
-      return
-    }
-
-    e.stopPropagation()
-    e.preventDefault()
+  // Clears transient menus/popovers when a drag begins.
+  const onCloseDragMenus = useCallback(() => {
     setContextMenu(null)
     setClusterCtx(null)
     setDissolveConfirm(null)
     setNewGlobPos(null)
+  }, [])
 
-    if (type === 'cluster') {
-      onTouchCluster(id)
-      setDraggingClusterId(id)
-      shakeHistory.current = [{ x: e.clientX, y: e.clientY, t: Date.now() }]
-      clusterClickStart.current = { x: e.clientX, y: e.clientY }
-    }
-    if (type === 'glob') {
-      const g = globs.find(g => g.id === id)
-      if (g && !g.clusterId) setDraggingFreeGlob(true)
-    }
+  const {
+    dragging,
+    draggingFreeGlob,
+    setDraggingFreeGlob,
+    draggingClusterId,
+    mergeHoverTargetId,
+    onPointerDown,
+  } = useClusterDrag({
+    globs,
+    connectionsRef,
+    handleDropRef,
+    onTouchCluster,
+    onUpdatePos,
+    onUpdateClusterPos,
+    onToggleAllTodosInCluster,
+    onDisconnectClusters,
+    onCloseMenus: onCloseDragMenus,
+    onShakeDissolve: setShakeDissolve,
+    onClusterTrashConfirm: setClusterTrashConfirm,
+    onMergePrompt: setMergePrompt,
+    onAddingToCluster: setAddingToClusterId,
+  })
 
-    // For clusters, compute offset from the cluster element's center (not the handle)
-    const el = type === 'cluster'
-      ? (e.currentTarget as HTMLElement).closest('.cluster') as HTMLElement
-      : e.currentTarget as HTMLElement
-    const rect = el.getBoundingClientRect()
-    dragging.current = {
-      id,
-      type,
-      offX: e.clientX - rect.left - rect.width / 2,
-      offY: e.clientY - rect.top - rect.height / 2,
-    }
-
-    const onMove = (ev: PointerEvent) => {
-      if (!dragging.current) return
-      const nx = ev.clientX - dragging.current.offX
-      const ny = ev.clientY - dragging.current.offY
-      if (dragging.current.type === 'glob') {
-        onUpdatePos(dragging.current.id, nx, ny)
-      } else {
-        onUpdateClusterPos(dragging.current.id, nx, ny)
-
-        // Hold-to-merge: the cluster whose bounds contain the CURSOR is the merge candidate.
-        // (Cursor-position is the source of truth: wherever the user is pointing IS the target.)
-        // Use elementsFromPoint (plural) and walk past the dragged cluster — disabling pointer-events on
-        // the dragged cluster alone doesn't help because its `.cluster-edge-hit` children have
-        // `pointer-events: auto` and still register as targets.
-        const cid = dragging.current.id
-        let newHoverId: string | null = null
-        for (const el of document.elementsFromPoint(ev.clientX, ev.clientY)) {
-          const clusterEl = (el as HTMLElement).closest('.cluster[data-cluster-id]') as HTMLElement | null
-          if (!clusterEl) continue
-          const id = clusterEl.dataset.clusterId
-          if (id && id !== cid) { newHoverId = id; break }
-        }
-
-        if (newHoverId !== mergeHoverIdRef.current) {
-          // Hover target changed — reset glow + restart timer.
-          if (mergeHoverTimerRef.current !== null) {
-            window.clearTimeout(mergeHoverTimerRef.current)
-            mergeHoverTimerRef.current = null
-          }
-          if (mergeHoverTargetIdRef.current !== null) setMergeHoverTargetId(null)
-          mergeHoverIdRef.current = newHoverId
-          if (newHoverId) {
-            mergeHoverTimerRef.current = window.setTimeout(() => {
-              setMergeHoverTargetId(newHoverId)
-              mergeHoverTimerRef.current = null
-            }, MERGE_HOLD_MS)
-          }
-        }
-
-        // Track shake history
-        const now = Date.now()
-        const hist = shakeHistory.current
-        hist.push({ x: ev.clientX, y: ev.clientY, t: now })
-        // Keep last 1.5s of history
-        while (hist.length > 0 && now - hist[0].t > 1500) hist.shift()
-
-        // Detect shake: count direction reversals in X axis
-        if (hist.length >= 6) {
-          let reversals = 0
-          for (let i = 2; i < hist.length; i++) {
-            const dx1 = hist[i - 1].x - hist[i - 2].x
-            const dx2 = hist[i].x - hist[i - 1].x
-            if (dx1 * dx2 < 0 && Math.abs(dx2) > 3) reversals++
-          }
-          if (reversals >= 5) {
-            // Shake detected — stop drag, show modal
-            dragging.current = null
-            shakeHistory.current = []
-            setDraggingFreeGlob(false)
-            setDraggingClusterId(null)
-            setShakeDissolve(id)
-            // Clear any pending merge-hover state from this drag.
-            if (mergeHoverTimerRef.current !== null) {
-              window.clearTimeout(mergeHoverTimerRef.current)
-              mergeHoverTimerRef.current = null
-            }
-            mergeHoverIdRef.current = null
-            setMergeHoverTargetId(null)
-            window.removeEventListener('pointermove', onMove)
-            window.removeEventListener('pointerup', onUp)
-            return
-          }
-        }
-      }
-    }
-
-    const onUp = (ev: PointerEvent) => {
-      // Snapshot + immediately clear hold-to-merge state (timer/refs) so any branch is safe.
-      const heldMergeTargetId = mergeHoverTargetIdRef.current
-      if (mergeHoverTimerRef.current !== null) {
-        window.clearTimeout(mergeHoverTimerRef.current)
-        mergeHoverTimerRef.current = null
-      }
-      mergeHoverIdRef.current = null
-      if (heldMergeTargetId !== null) setMergeHoverTargetId(null)
-
-      if (dragging.current?.type === 'glob') {
-        handleDropRef.current(dragging.current.id, ev.clientX, ev.clientY)
-      }
-      if (dragging.current?.type === 'cluster') {
-        const cid = dragging.current.id
-        const start = clusterClickStart.current
-        const moved = start ? Math.hypot(ev.clientX - start.x, ev.clientY - start.y) : 0
-
-        // Alt+drag severs all connections from the dragged cluster.
-        if (ev.altKey && moved >= 5) {
-          connectionsRef.current.forEach(cn => {
-            if (cn.cluster1Id === cid || cn.cluster2Id === cid) {
-              onDisconnectClusters(cn.id)
-            }
-          })
-          dragging.current = null
-          shakeHistory.current = []
-          clusterClickStart.current = null
-          setDraggingFreeGlob(false)
-          setDraggingClusterId(null)
-          window.removeEventListener('pointermove', onMove)
-          window.removeEventListener('pointerup', onUp)
-          return
-        }
-        // Click (no drag) → open add-input
-        if (start && !ev.altKey) {
-          if (moved < 5) {
-            dragging.current = null
-            shakeHistory.current = []
-            clusterClickStart.current = null
-            setDraggingFreeGlob(false)
-            setDraggingClusterId(null)
-            setAddingToClusterId(cid)
-            window.removeEventListener('pointermove', onMove)
-            window.removeEventListener('pointerup', onUp)
-            return
-          }
-        }
-        // Check if dropped on trash zone (bottom-right corner)
-        const w = window.innerWidth
-        const h = window.innerHeight
-        const trashCx = w - TRASH_MARGIN - TRASH_SIZE / 2
-        const trashCy = h - 80 - TRASH_SIZE / 2
-        const tdx = ev.clientX - trashCx
-        const tdy = ev.clientY - trashCy
-        if (Math.sqrt(tdx * tdx + tdy * tdy) < TRASH_SIZE) {
-          dragging.current = null
-          shakeHistory.current = []
-          setDraggingFreeGlob(false)
-          setDraggingClusterId(null)
-          setClusterTrashConfirm(cid)
-          window.removeEventListener('pointermove', onMove)
-          window.removeEventListener('pointerup', onUp)
-          return
-        }
-        // Hold-to-merge: if we were glowing a target, open the rename merge modal (same UX as the tether merge button).
-        if (heldMergeTargetId && heldMergeTargetId !== cid) {
-          setMergePrompt({ c1Id: cid, c2Id: heldMergeTargetId, connectionId: '' })
-        }
-      }
-      dragging.current = null
-      shakeHistory.current = []
-      clusterClickStart.current = null
-      setDraggingFreeGlob(false)
-      setDraggingClusterId(null)
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }, [onDisconnectClusters, onUpdatePos, onUpdateClusterPos, onTouchCluster, globs])
+  useFreeGlobPhysics({ dragging, updateGlobs })
 
   // Context menu
   const onCtx = useCallback((e: React.MouseEvent, globId: string, inCluster: boolean) => {
@@ -460,10 +271,9 @@ export default function Galaxy({
     if (interactionDiff !== 0) return interactionDiff
     return a.name.localeCompare(b.name)
   })
-  const clusterGlobs = (c: Cluster) => {
-    const map = new Map(globs.map(g => [g.id, g]))
-    return c.globIds.map(id => map.get(id)).filter(Boolean) as Glob[]
-  }
+  const globById = useMemo(() => new Map(globs.map(g => [g.id, g])), [globs])
+  const clusterGlobs = (c: Cluster) =>
+    c.globIds.map(id => globById.get(id)).filter(Boolean) as Glob[]
   const viewportW = typeof window !== 'undefined' ? window.innerWidth : 1200
   const viewportH = typeof window !== 'undefined' ? window.innerHeight : 800
   const onboardingGlobX = Math.min(Math.max(viewportW * 0.34, 180), viewportW - 260)
@@ -696,11 +506,7 @@ export default function Galaxy({
                 return
               }
               const { clientX: mx, clientY: my } = e
-              const w = window.innerWidth, h = window.innerHeight
-              const trashCx = w - TRASH_MARGIN - TRASH_SIZE / 2
-              const trashCy = h - 80 - TRASH_SIZE / 2
-              const tdx = mx - trashCx, tdy = my - trashCy
-              if (Math.sqrt(tdx * tdx + tdy * tdy) < TRASH_SIZE) {
+              if (isOverTrash(mx, my)) {
                 setTrashConfirm(glob.id)
                 setDragReorder(null)
                 return

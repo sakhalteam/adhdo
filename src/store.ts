@@ -68,6 +68,21 @@ function hydrateState(saved: { globs?: Partial<Glob>[]; clusters?: Partial<Clust
   return { globs, clusters, connections: saved.connections ?? [] }
 }
 
+/**
+ * A fingerprint of the *meaningful* state — everything except physics drift
+ * (x/y/vx/vy/lastInteraction). Used by the autosave loop to decide whether a
+ * write is worthwhile: globs never settle (MIN_SPEED keeps them drifting), so a
+ * full-state diff would fire every tick. Positions still persist whenever a real
+ * change triggers a save, and on beforeunload.
+ */
+export function stateSignature(state: GalaxyState): string {
+  return JSON.stringify({
+    globs: state.globs.map(g => [g.id, g.text, g.color, g.flagged, g.isTodo, g.done, g.clusterId]),
+    clusters: state.clusters.map(c => [c.id, c.name, c.color, c.collapsed, c.role, c.globIds]),
+    connections: state.connections.map(cn => [cn.id, cn.cluster1Id, cn.cluster2Id, cn.color]),
+  })
+}
+
 export function saveLocal(state: GalaxyState) {
   const now = new Date().toISOString()
   localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeState(state)))
@@ -128,10 +143,6 @@ export async function loadRemote(supabase: SupabaseClient): Promise<{ state: Gal
     updatedAt: data.updated_at,
   }
 }
-
-// Keep legacy names as aliases for backward compat in App.tsx autosave
-export const save = saveLocal
-export const load = loadLocal
 
 export function makeGlob(text: string, cx: number, cy: number): Glob {
   const angle = Math.random() * Math.PI * 2

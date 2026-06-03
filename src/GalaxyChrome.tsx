@@ -20,6 +20,20 @@ function clampMenuToViewport(el: HTMLDivElement | null) {
   if (r.top > maxTop) el.style.top = `${Math.max(margin, maxTop)}px`
 }
 
+/** Six-dot drag grip, inline so it can't be mangled by file-encoding round-trips. */
+function GripIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="9" cy="6" r="1.7" />
+      <circle cx="15" cy="6" r="1.7" />
+      <circle cx="9" cy="12" r="1.7" />
+      <circle cx="15" cy="12" r="1.7" />
+      <circle cx="9" cy="18" r="1.7" />
+      <circle cx="15" cy="18" r="1.7" />
+    </svg>
+  )
+}
+
 export type MarqueeRect = {
   x1: number
   y1: number
@@ -806,7 +820,7 @@ export function ClusterItemRow({
           {glob.done ? '✓' : ''}
         </button>
       )}
-      <div className="cluster-glob-grip" title="Drag to reorder">⠿</div>
+      <div className="cluster-glob-grip" title="Drag to reorder"><GripIcon size={12} /></div>
       {editing ? (
         <input
           className="glob-edit inline"
@@ -927,8 +941,9 @@ export function ClusterCard({
         className="cluster-drag-handle"
         onPointerDown={onClusterEdgeDragStart}
         onContextMenu={onOpenClusterMenu}
+        title="Drag to move"
       >
-        â ¿
+        <GripIcon />
       </div>
       <div className="cluster-link-handle" title="Drag to connect" onPointerDown={onConnectStart}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">

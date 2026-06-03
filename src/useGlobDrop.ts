@@ -1,21 +1,18 @@
 import { useEffect, useRef } from 'react'
 import type { Cluster, Glob } from './types'
+import { isOverTrash } from './trashZone'
 
 export type GlobDropHandler = (globId: string, dropX: number, dropY: number) => void
 
 export function useGlobDrop({
   globs,
   clusters,
-  trashSize,
-  trashMargin,
   onTrash,
   onAddToCluster,
   onCreateCluster,
 }: {
   globs: Glob[]
   clusters: Cluster[]
-  trashSize: number
-  trashMargin: number
   onTrash: (globId: string) => void
   onAddToCluster: (globId: string, clusterId: string) => void
   onCreateCluster: (id1: string, id2: string, x: number, y: number) => void
@@ -27,13 +24,7 @@ export function useGlobDrop({
       const droppedGlob = globs.find(glob => glob.id === globId)
       if (!droppedGlob) return
 
-      const w = window.innerWidth
-      const h = window.innerHeight
-      const trashCx = w - trashMargin - trashSize / 2
-      const trashCy = h - 80 - trashSize / 2
-      const dx0 = dropX - trashCx
-      const dy0 = dropY - trashCy
-      if (Math.sqrt(dx0 * dx0 + dy0 * dy0) < trashSize) {
+      if (isOverTrash(dropX, dropY)) {
         onTrash(globId)
         return
       }
@@ -57,7 +48,7 @@ export function useGlobDrop({
         }
       }
     }
-  }, [clusters, globs, onAddToCluster, onCreateCluster, onTrash, trashMargin, trashSize])
+  }, [clusters, globs, onAddToCluster, onCreateCluster, onTrash])
 
   return handleDropRef
 }
