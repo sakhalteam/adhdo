@@ -1590,6 +1590,289 @@ body {
   to { opacity: 1; }
 }
 
+/* ── mobile (list view) ──────────────────────────────────
+ * Rendered instead of the galaxy on phones (see useIsMobile + App.tsx).
+ * Touch-first: big tap targets, bottom capture bar, collapsible cluster sections. */
+.mobile-app {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+/* faint nebula wash so it still feels like adhdo, no animation/physics cost */
+.mobile-app::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 40% at 20% 0%, rgba(99, 102, 241, 0.12), transparent),
+    radial-gradient(ellipse 70% 40% at 90% 100%, rgba(6, 182, 212, 0.10), transparent);
+  pointer-events: none;
+}
+
+.mobile-head {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 14px 120px 8px; /* horizontal padding clears the fixed home/auth chrome */
+  text-align: center;
+}
+.mobile-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  background: linear-gradient(90deg, var(--accent-bright), #67e8f9);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.mobile-count { font-size: 10px; color: var(--muted); }
+
+.mobile-list {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 12px 0;
+}
+.mobile-list-pad { height: calc(96px + env(safe-area-inset-bottom, 0px)); }
+
+.mobile-empty {
+  margin-top: 18vh;
+  text-align: center;
+  padding: 0 24px;
+  animation: fadeIn 0.4s ease;
+}
+.mobile-empty-emoji { font-size: 44px; margin-bottom: 10px; }
+.mobile-empty-title { font-size: 18px; font-weight: 600; color: var(--text); }
+.mobile-empty-sub { font-size: 14px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+
+.mobile-section { margin-bottom: 14px; }
+.mobile-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.mobile-section-head.cluster {
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--cluster-color, var(--accent)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cluster-color, var(--accent)) 35%, transparent);
+  margin-top: 2px;
+}
+.mobile-chevron { flex: 0 0 auto; transition: transform 0.2s; color: var(--cluster-color, var(--muted)); }
+.mobile-chevron.open { transform: rotate(90deg); }
+.mobile-section-name { flex: 0 1 auto; }
+.mobile-section-name.cluster {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mobile-section-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  padding: 4px 8px;
+  outline: none;
+}
+.mobile-section-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 99px;
+  padding: 2px 8px;
+}
+
+/* item rows */
+.mobile-item-wrap {
+  position: relative;
+  margin: 6px 0;
+  border-radius: 14px;
+  overflow: hidden;
+}
+.mobile-item-delete {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 22px;
+  background: var(--danger);
+  color: #fff;
+}
+.mobile-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 6px 10px 12px;
+  background: var(--bg-elev-solid);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  touch-action: pan-y;
+  transition: transform 0.18s ease;
+}
+.mobile-item.in-cluster { margin-left: 14px; }
+.mobile-item.flagged { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+/* dim done rows via their content, NOT row opacity — a translucent row would let
+ * the red swipe-to-delete layer behind it bleed through. Keep the row solid. */
+.mobile-item.done .mobile-item-text { opacity: 0.6; }
+
+.mobile-check {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border-bright);
+  background: transparent;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.mobile-check.todo { border-color: color-mix(in srgb, var(--glob-color, var(--accent)) 70%, transparent); }
+.mobile-check.done {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.mobile-item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.35;
+  color: var(--text);
+  word-break: break-word;
+}
+.mobile-item.done .mobile-item-text { text-decoration: line-through; color: var(--muted); }
+.mobile-flag { color: var(--danger); margin-right: 5px; }
+.mobile-item-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  padding: 5px 8px;
+  outline: none;
+}
+
+.mobile-menu-btn {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 10px;
+}
+.mobile-menu-btn:active { background: rgba(255, 255, 255, 0.06); }
+
+/* bottom action sheet */
+.mobile-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  animation: fadeIn 0.15s ease;
+}
+.mobile-sheet {
+  width: 100%;
+  background: var(--bg-elev-solid);
+  border-top-left-radius: 22px;
+  border-top-right-radius: 22px;
+  border-top: 1px solid var(--border-bright);
+  padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.5);
+  animation: sheetUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.mobile-sheet-grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--border-bright);
+  margin: 4px auto 10px;
+}
+.mobile-sheet-title {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 0 12px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mobile-sheet-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 16px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  padding: 14px 12px;
+  cursor: pointer;
+}
+.mobile-sheet-row:active { background: rgba(255, 255, 255, 0.06); }
+.mobile-sheet-row.danger { color: var(--danger); }
+.mobile-sheet-row.cancel {
+  margin-top: 4px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* capture bar on mobile: wider, taller tap target, sits above safe area */
+.capture-bar.mobile { padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px)); }
+.capture-bar.mobile .capture-wrap { max-width: 100%; }
+.capture-bar.mobile .capture-input { font-size: 16px; padding: 14px 56px 14px 20px; } /* 16px avoids iOS zoom-on-focus */
+.capture-bar.mobile .capture-send { width: 40px; height: 40px; }
+
+/* reposition the fixed chrome so it doesn't fight the list / capture bar */
+.mobile-root .undo-redo-bar {
+  top: auto;
+  left: 12px;
+  bottom: calc(74px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+}
+.mobile-root .auth-btn { right: 12px; }
+
 /* ── responsive ──────────────────────────────────────── */
 @media (max-width: 600px) {
   .capture-bar { padding: 10px 16px 14px; }

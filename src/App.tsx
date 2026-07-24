@@ -4,6 +4,8 @@ import { supabase } from './supabaseClient'
 import type { GalaxyState, Glob, Cluster } from './types'
 import type { User } from '@supabase/supabase-js'
 import Galaxy from './Galaxy'
+import MobileApp from './MobileApp'
+import { useIsMobile } from './useIsMobile'
 import { AuthButton, CaptureBar, CloudIndicator, HomeButton, SaveIndicator, UndoRedoBar } from './AppChrome'
 
 const MAX_UNDO = 40
@@ -19,6 +21,7 @@ export default function App() {
   const [seenOnboarding, setSeenOnboarding] = useState<boolean>(hasSeenOnboarding)
   const remoteSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const needsRemoteSave = useRef(false)
+  const isMobile = useIsMobile()
   const isGalaxyEmpty = state.globs.length === 0 && state.clusters.length === 0 && state.connections.length === 0
   const onboardingActive = isGalaxyEmpty && !seenOnboarding
 
@@ -725,6 +728,38 @@ export default function App() {
     addGlob(input.value)
     input.value = ''
     input.focus()
+  }
+
+  if (isMobile) {
+    return (
+      <div className="app mobile-root">
+        <HomeButton />
+        <UndoRedoBar undoLen={undoLen} redoLen={redoLen} onUndo={undo} onRedo={redo} />
+        <MobileApp
+          state={state}
+          onboardingActive={onboardingActive}
+          onAdd={addGlob}
+          onToggleDone={toggleDone}
+          onToggleTodo={toggleTodo}
+          onToggleFlag={toggleFlag}
+          onUpdateText={updateGlobText}
+          onDelete={deleteGlob}
+          onAddToCluster={addToCluster}
+          onMoveGlobToCluster={moveGlobToCluster}
+          onConvertToCluster={convertToCluster}
+          onTransferToNewCluster={transferToNewCluster}
+          onRemoveFromCluster={removeFromCluster}
+          onToggleClusterCollapse={toggleClusterCollapse}
+          onRenameCluster={renameCluster}
+          onToggleAllTodosInCluster={toggleAllTodosInCluster}
+          onDissolveCluster={dissolveCluster}
+          onDeleteCluster={deleteCluster}
+        />
+        <AuthButton user={user} onLogin={login} onLogout={logout} />
+        <SaveIndicator visible={showSaved} />
+        {user && cloudStatus !== 'idle' && <CloudIndicator status={cloudStatus} />}
+      </div>
+    )
   }
 
   return (
