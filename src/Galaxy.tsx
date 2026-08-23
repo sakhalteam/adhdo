@@ -7,8 +7,10 @@ import {
   ConnectionLayer,
   FreeGlob,
   GalaxyOverlays,
+  GroupDragGhost,
   MarqueeOverlay,
   ModeTools,
+  NewClusterPromptModal,
   OnboardingLayer,
   type RecolorTarget,
 } from './GalaxyChrome'
@@ -20,6 +22,7 @@ import { useFreeGlobPhysics } from './useFreeGlobPhysics'
 import { useGalaxyHotkeys } from './useGalaxyHotkeys'
 import { useGalaxySearch } from './useGalaxySearch'
 import { useGlobDrop } from './useGlobDrop'
+import { useGroupDrag } from './useGroupDrag'
 import { useMarqueeSelection } from './useMarqueeSelection'
 
 interface Props {
@@ -56,7 +59,8 @@ interface Props {
   onRecolorGlobs: (ids: string[], color: string) => void
   onToggleAllTodosInGlobs: (ids: string[]) => void
   onDeleteGlobs: (ids: string[]) => void
-  onTransferToNewCluster: (ids: string[], name?: string) => void
+  onTransferToNewCluster: (ids: string[], name?: string, at?: { x: number; y: number }) => void
+  onMoveGlobsToCluster: (ids: string[], clusterId: string) => void
   onConnectClusters: (c1Id: string, c2Id: string) => void
   onDisconnectClusters: (connectionId: string) => void
   onMergeClusters: (c1Id: string, c2Id: string, newName: string) => void
@@ -76,6 +80,7 @@ export default function Galaxy({
   onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
   onRecolor, onRecolorCluster, onRecolorAllInCluster, onRecolorGlobs, onToggleAllTodosInGlobs, onDeleteGlobs, onTransferToNewCluster,
+  onMoveGlobsToCluster,
   onConnectClusters, onDisconnectClusters, onMergeClusters,
   onGatherFreeGlobs, onClearAll, onExportJSON, onImportJSON,
 }: Props) {
@@ -106,6 +111,8 @@ export default function Galaxy({
     commitSelection,
   } = useMarqueeSelection()
   const [bulkCtx, setBulkCtx] = useState<{ x: number; y: number } | null>(null)
+  /** Set when a carried selection is dropped on open space, pending a name. */
+  const [groupPrompt, setGroupPrompt] = useState<{ ids: string[]; x: number; y: number } | null>(null)
   const [dissolveConfirm, setDissolveConfirm] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingClusterId, setEditingClusterId] = useState<string | null>(null)
@@ -219,6 +226,27 @@ export default function Galaxy({
     onCreateCluster,
   })
 
+  /**
+   * Carry a marquee selection somewhere. Dropping on a cluster files everything
+   * into it; dropping on open space asks for a name and makes a new one there.
+   */
+  const groupDrag = useGroupDrag({
+    selectedIds,
+    onDropIntoCluster: (ids, clusterId) => {
+      const target = clusters.find(c => c.id === clusterId)
+      // Dropping a selection back where it already lives should be a no-op, not
+      // a silent reshuffle to the bottom of the cluster.
+      if (target && ids.every(id => target.globIds.includes(id))) {
+        clearSelection()
+        return
+      }
+      onMoveGlobsToCluster(ids, clusterId)
+      onTouchCluster(clusterId)
+      clearSelection()
+    },
+    onDropOnEmpty: (ids, x, y) => setGroupPrompt({ ids, x, y }),
+  })
+
   // Clears transient menus/popovers when a drag begins.
   const onCloseDragMenus = useCallback(() => {
     setContextMenu(null)
@@ -329,6 +357,27 @@ export default function Galaxy({
           onStartSelection={startSelection}
           onUpdateSelection={updateSelection}
           onCommitSelection={commitSelection}
+          onTryGroupDrag={groupDrag.tryStart}
+          groupDragging={groupDrag.dragging}
+        />
+      )}
+      {groupDrag.ghost && (
+        <GroupDragGhost
+          x={groupDrag.ghost.x}
+          y={groupDrag.ghost.y}
+          count={selectedIds.size}
+          overCluster={groupDrag.hoverClusterId !== null}
+        />
+      )}
+      {groupPrompt && (
+        <NewClusterPromptModal
+          count={groupPrompt.ids.length}
+          onCreate={name => {
+            onTransferToNewCluster(groupPrompt.ids, name, { x: groupPrompt.x, y: groupPrompt.y })
+            setGroupPrompt(null)
+            clearSelection()
+          }}
+          onCancel={() => setGroupPrompt(null)}
         />
       )}
       <ModeTools
@@ -368,6 +417,7 @@ export default function Galaxy({
           glob={g}
           editing={editingId === g.id}
           highlighted={highlightId === g.id}
+          selected={selectedIds.has(g.id)}
           onPointerDown={(e, globId) => onPointerDown(e, globId, 'glob')}
           onConvertToClusterTodo={globId => {
             onConvertToCluster(globId)
@@ -389,7 +439,7 @@ export default function Galaxy({
             key={c.id}
             cluster={c}
             globs={cGlobs}
-            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isFocused ? 'focused' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''} ${highlightId === c.id ? 'highlight-pulse' : ''} ${isMergeTarget ? 'merge-target' : ''} ${addingToClusterId === c.id ? 'adding-active' : ''}`}
+            className={`cluster ${c.collapsed ? 'collapsed' : ''} ${isFocused ? 'focused' : ''} ${draggingClusterId === c.id ? 'dragging-active' : ''} ${highlightId === c.id ? 'highlight-pulse' : ''} ${isMergeTarget ? 'merge-target' : ''} ${addingToClusterId === c.id ? 'adding-active' : ''} ${groupDrag.hoverClusterId === c.id ? 'group-target' : ''}`}
             zIndex={zRank}
             editingCluster={editingClusterId === c.id}
             dissolvePending={dissolveConfirm === c.id}

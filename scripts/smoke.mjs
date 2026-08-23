@@ -4,7 +4,8 @@
  */
 import { chromium } from 'playwright-core'
 
-const URL = 'http://localhost:5174/adhdo/'
+// Vite picks the next free port if 5173 is taken; override with PORT=5174.
+const URL = `http://localhost:${process.env.PORT ?? 5173}/adhdo/`
 const now = Date.now()
 
 let n = 0

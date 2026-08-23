@@ -48,6 +48,8 @@ export function MarqueeOverlay({
   onStartSelection,
   onUpdateSelection,
   onCommitSelection,
+  onTryGroupDrag,
+  groupDragging,
 }: {
   rect: MarqueeRect | null
   selectedIds: Set<string>
@@ -55,10 +57,13 @@ export function MarqueeOverlay({
   onStartSelection: (event: PointerEvent<HTMLDivElement>) => void
   onUpdateSelection: (x: number, y: number) => void
   onCommitSelection: (event: PointerEvent<HTMLDivElement>) => void
+  /** Offered first refusal on every press; true means it took the gesture. */
+  onTryGroupDrag: (event: PointerEvent<HTMLDivElement>) => boolean
+  groupDragging: boolean
 }) {
   return (
     <div
-      className="marquee-overlay"
+      className={`marquee-overlay ${groupDragging ? 'group-dragging' : ''}`}
       onClick={e => e.stopPropagation()}
       onContextMenu={e => {
         e.preventDefault()
@@ -77,6 +82,9 @@ export function MarqueeOverlay({
       onPointerDown={e => {
         e.preventDefault()
         e.stopPropagation()
+        // Pressing on something already selected means "pick these up", not
+        // "throw the selection away and start a new box".
+        if (onTryGroupDrag(e)) return
         ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
         onStartSelection(e)
       }}
@@ -101,6 +109,83 @@ export function MarqueeOverlay({
           }}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * The thing that follows the cursor while a selection is being carried.
+ *
+ * A stack of cards rather than the six real globs: what matters mid-drag is
+ * "how many am I holding and where will they land", and animating the actual
+ * blobs through the physics sim answers neither while costing a lot of motion.
+ */
+export function GroupDragGhost({
+  x,
+  y,
+  count,
+  overCluster,
+}: {
+  x: number
+  y: number
+  count: number
+  overCluster: boolean
+}) {
+  return (
+    <div className={`group-ghost ${overCluster ? 'over-cluster' : ''}`} style={{ left: x, top: y }}>
+      <span className="group-ghost-stack" aria-hidden="true">
+        <i /><i /><i />
+      </span>
+      <span className="group-ghost-count">{count}</span>
+      <span className="group-ghost-label">
+        {overCluster ? 'drop to file here' : 'drop to make a cluster'}
+      </span>
+    </div>
+  )
+}
+
+export function NewClusterPromptModal({
+  count,
+  onCreate,
+  onCancel,
+}: {
+  count: number
+  onCreate: (name: string) => void
+  onCancel: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const submit = () => {
+    const name = inputRef.current?.value.trim()
+    onCreate(name || 'new cluster')
+  }
+
+  return (
+    <div className="shake-modal-overlay" onClick={e => { e.stopPropagation(); onCancel() }}>
+      <div className="shake-modal" onClick={e => e.stopPropagation()}>
+        <p>cluster {count} thought{count === 1 ? '' : 's'}</p>
+        <p className="merge-subtitle">name it:</p>
+        <input
+          ref={inputRef}
+          className="merge-name-input"
+          autoFocus
+          defaultValue="new cluster"
+          onFocus={e => e.currentTarget.select()}
+          onKeyDown={e => {
+            if (e.key === 'Enter') submit()
+            if (e.key === 'Escape') onCancel()
+          }}
+        />
+        <div className="shake-modal-actions" style={{ marginTop: 12 }}>
+          <button
+            className="shake-modal-yes"
+            style={{ background: 'rgba(108,92,231,0.15)', borderColor: 'rgba(108,92,231,0.3)', color: '#a78bfa' }}
+            onClick={submit}
+          >
+            create
+          </button>
+          <button className="shake-modal-no" onClick={onCancel}>cancel</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -141,6 +226,7 @@ export function FreeGlob({
   glob,
   editing,
   highlighted,
+  selected,
   onPointerDown,
   onConvertToClusterTodo,
   onOpenMenu,
@@ -151,6 +237,7 @@ export function FreeGlob({
   glob: Glob
   editing: boolean
   highlighted: boolean
+  selected: boolean
   onPointerDown: (e: PointerEvent<HTMLDivElement>, globId: string) => void
   onConvertToClusterTodo: (globId: string) => void
   onOpenMenu: (e: MouseEvent<HTMLDivElement>, globId: string) => void
@@ -160,7 +247,12 @@ export function FreeGlob({
 }) {
   return (
     <div
-      className={`glob ${glob.flagged ? 'flagged' : ''} ${highlighted ? 'highlight-pulse' : ''}`}
+      className={`glob ${glob.flagged ? 'flagged' : ''} ${highlighted ? 'highlight-pulse' : ''} ${selected ? 'selected' : ''}`}
+      // The marquee hit-tests `[data-glob-id]`. Without this a free-floating
+      // glob was invisible to the rubber band — you could only ever select
+      // things already inside a cluster, which is backwards: loose thoughts are
+      // exactly what you want to sweep up and file.
+      data-glob-id={glob.id}
       style={{
         left: glob.x,
         top: glob.y,
@@ -1401,6 +1493,8 @@ export function HelpPanel({
             <div className="help-item"><span className="help-action">Shake</span> a cluster to dissolve it</div>
             <div className="help-item"><span className="help-action">Drag</span> a glob or cluster to the trash (bottom-right)</div>
             <div className="help-item"><span className="help-action">Hold</span> a cluster over another (~0.75s) until it glows, then release to merge (you'll be asked for a new name)</div>
+            <div className="help-item"><kbd>M</kbd> for the marquee, then <span className="help-action">drag</span> a box to select several — <kbd>Shift</kbd> adds, <kbd>Ctrl</kbd> removes</div>
+            <div className="help-item"><span className="help-action">Drag</span> from any selected item to carry the whole selection: drop on a cluster to file it there, or on empty space to make a new one</div>
             <div className="help-item"><kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo</div>
             <div className="help-item"><kbd>Ctrl</kbd>+<kbd>K</kbd> to search, <kbd>Esc</kbd> to close menus</div>
           </div>

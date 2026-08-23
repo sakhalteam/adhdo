@@ -238,28 +238,40 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo])
 
-  // Auto-save locally: check every 2s if anything *meaningful* changed.
-  // Keyed off stateSignature (not the full state) so perpetual physics drift
-  // doesn't trigger a write — and the "saved" badge — every single tick.
+  /**
+   * Auto-save locally: every 2s, write if anything *meaningful* changed.
+   *
+   * Reads through stateRef with an empty dep array, and that is the whole point.
+   * Depending on `state` here meant the effect tore down and re-armed the
+   * interval on every state change — and the galaxy's physics loop pushes a new
+   * state object every animation frame, so the timer was reset ~60 times a
+   * second and **never once reached two seconds**. Local autosave silently did
+   * nothing on desktop; only the beforeunload handler was saving, so anything
+   * that ended the page without it (a crash, a killed tab) lost the session.
+   *
+   * stateSignature is what keeps the write cheap: it ignores x/y/velocity, so
+   * perpetual drift doesn't count as a change worth persisting.
+   */
   useEffect(() => {
     const interval = setInterval(() => {
-      const sig = stateSignature(state)
-      if (sig !== lastSavedRef.current) {
-        saveLocal(state)
-        lastSavedRef.current = sig
-        setShowSaved(true)
-        setTimeout(() => setShowSaved(false), 1200)
-      }
+      const current = stateRef.current
+      const sig = stateSignature(current)
+      if (sig === lastSavedRef.current) return
+      saveLocal(current)
+      lastSavedRef.current = sig
+      setShowSaved(true)
+      setTimeout(() => setShowSaved(false), 1200)
     }, 2000)
     return () => clearInterval(interval)
-  }, [state])
+  }, [])
 
-  // Also save on beforeunload
+  // Also save on beforeunload. Same reasoning for the ref: re-registering this
+  // listener every frame is pure waste.
   useEffect(() => {
-    const onUnload = () => saveLocal(state)
+    const onUnload = () => saveLocal(stateRef.current)
     window.addEventListener('beforeunload', onUnload)
     return () => window.removeEventListener('beforeunload', onUnload)
-  }, [state])
+  }, [])
 
   // Focus input on load
   useEffect(() => { inputRef.current?.focus() }, [])
@@ -635,7 +647,17 @@ export default function App() {
     })
   }, [setState])
 
-  const transferToNewCluster = useCallback((ids: string[], name: string = 'new cluster') => {
+  /**
+   * `at` places the new cluster where the user actually dropped the selection.
+   * Without it the cluster lands on the centroid of where the thoughts came
+   * from, which is the right guess for a menu action and the wrong one for a
+   * drag — you put them *there* for a reason.
+   */
+  const transferToNewCluster = useCallback((
+    ids: string[],
+    name: string = 'new cluster',
+    at?: { x: number; y: number },
+  ) => {
     if (ids.length === 0) return
     const set = new Set(ids)
     setState(prev => {
@@ -644,7 +666,9 @@ export default function App() {
       // New cluster centroid: average of source clusters' positions (fall back to item x,y if no parent).
       const sourceClusterIds = Array.from(new Set(items.map(g => g.clusterId).filter((v): v is string => !!v)))
       let cx = 0, cy = 0, count = 0
-      if (sourceClusterIds.length) {
+      if (at) {
+        cx = at.x; cy = at.y; count = 1
+      } else if (sourceClusterIds.length) {
         for (const cid of sourceClusterIds) {
           const c = prev.clusters.find(cl => cl.id === cid)
           if (c) { cx += c.x; cy += c.y; count++ }
@@ -962,6 +986,7 @@ export default function App() {
         onToggleAllTodosInGlobs={toggleAllTodosInGlobs}
         onDeleteGlobs={deleteGlobs}
         onTransferToNewCluster={transferToNewCluster}
+        onMoveGlobsToCluster={moveGlobsToCluster}
         onConnectClusters={connectClusters}
         onDisconnectClusters={disconnectClusters}
         onMergeClusters={mergeClusters}

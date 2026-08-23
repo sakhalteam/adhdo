@@ -52,7 +52,9 @@ way, and never give a mobile element a bare galaxy class name.
   - No modifier = replace selection. **Shift+drag** = add. **Ctrl/Cmd+drag** = remove (Blender-style).
   - Selected items get the maximalist visual: cluster-color-tinted background + cluster-color border + 5px left accent + pulsing glow (via `--cluster-color` CSS var).
   - Right-click on any selected item (when >1 selected) opens the **bulk-action context menu**: convert all to todos / recolor all (opens swatch popover with `bulk` target) / **transfer to new cluster** (creates a fresh cluster from the selection, removing items from their source clusters) / delete all.
-  - `App.tsx` exposes the bulk primitives: `recolorGlobs`, `toggleAllTodosInGlobs`, `deleteGlobs`, `transferToNewCluster`.
+  - `App.tsx` exposes the bulk primitives: `recolorGlobs`, `toggleAllTodosInGlobs`, `deleteGlobs`, `transferToNewCluster`, `moveGlobsToCluster`.
+  - **Carry the selection** (`useGroupDrag.ts`, 2026-08-22): press on any *already selected* item and drag to move the whole selection. `.marquee-overlay` covers the galaxy and swallows every pointerdown into "start a new rubber band", so the overlay now offers each press to `tryStart()` first; it takes the gesture only when the press landed on a selected item, otherwise declines and the marquee behaves exactly as before. The globs never move — a `GroupDragGhost` (stack icon + count) follows the cursor and the drop is what mutates. Drop on a cluster → `moveGlobsToCluster` + `.group-target` glow; drop on empty space → `NewClusterPromptModal` → `transferToNewCluster(ids, name, {x, y})`. Hit-testing uses `document.elementsFromPoint` (plural) so nothing needs its `pointer-events` toggled mid-gesture. `Esc` cancels.
+  - **`data-glob-id` used to be on cluster items only**, so the marquee could not see free-floating globs at all — you could only ever rubber-band things already inside a cluster, which is backwards. `FreeGlob` now carries it (and a `selected` class).
 - **Cluster z-order: click-to-front like Windows.** Clusters rank by `lastInteraction` (already updated on drag/rename/edit/etc.), highest rank = highest z-index. Touching any cluster brings it to the foreground. Hover does NOT promote (would cause z-thrashing).
 - Click anywhere inside a cluster item enters edit mode (was: only the text span). Drag-and-hold still becomes a reorder/pop-out drag via HTML5 dragstart.
 - Context menus + recolor popover clamp to viewport so they never clip off-screen.
@@ -77,7 +79,22 @@ way, and never give a mobile element a bare galaxy class name.
 - `repairState()` makes `cluster.globIds` (authoritative, ordered) and `glob.clusterId` agree. Without it a glob claiming a cluster that doesn't list it renders in *neither* the unsorted list nor the cluster — invisible but present. Runs on every hydrate, so it also heals old blobs.
 - Dirty flag persists in localStorage (`adhdo-dirty`) so a save that failed with no signal retries after a reload. One `sync()` entry point — dirty pushes (merging on stale), clean pulls — fired on login, focus, visibilitychange and **`online`**. The old split pull/push effects could race.
 
+## ⚠️ Local autosave and the physics loop
+
+The autosave effect must **read `stateRef.current` with an empty dep array**. It used to
+depend on `[state]`, and the galaxy's physics loop pushes a new state object every
+animation frame — so the 2s interval was torn down and re-armed ~60×/second and **never
+once fired**. Local saving on desktop was doing nothing; only `beforeunload` was writing,
+so anything that ended the page without it lost the session. Fixed 2026-08-22. Same
+reasoning for the `beforeunload` listener. `stateSignature` (which ignores x/y/velocity)
+is what keeps the write itself cheap.
+
 ## Testing
+
+`node scripts/group-drag-check.mjs` — 23 assertions for the marquee → carry-selection
+gesture (both drop targets, the naming modal, cluster placement at the drop point, and
+that a plain rubber band still works). Note it clicks the marquee **tool button** rather
+than pressing `M`: the capture bar autofocuses, so the keystroke just types into it.
 
 `node scripts/smoke.mjs` — 20 end-to-end assertions (capture, voice button, long-press select, bulk file, single-undo-per-batch, search, filters, swipe-delete, scroll-doesn't-delete, state repair, desktop galaxy intact). Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`.
 
