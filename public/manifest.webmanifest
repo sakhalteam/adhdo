@@ -1,0 +1,26 @@
+{
+  "name": "adhdo — galaxy brain dump",
+  "short_name": "adhdo",
+  "description": "Catch a thought before it escapes. Sort it out later.",
+  "id": "/adhdo/",
+  "start_url": "/adhdo/",
+  "scope": "/adhdo/",
+  "display": "standalone",
+  "background_color": "#0a0a1a",
+  "theme_color": "#0a0a1a",
+  "categories": ["productivity", "utilities", "lifestyle"],
+  "shortcuts": [
+    {
+      "name": "New thought",
+      "short_name": "Capture",
+      "description": "Open straight into the capture field",
+      "url": "/adhdo/?capture=1"
+    }
+  ],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

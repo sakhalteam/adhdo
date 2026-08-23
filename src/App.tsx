@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, hasSeenOnboarding, markOnboardingSeen, stateSignature, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
+import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, touchLocal, isNewer, isDirty, setDirty, isEmptyState, mergeStates, hasSeenOnboarding, markOnboardingSeen, stateSignature, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
+import type { RemoteState } from './store'
 import { supabase } from './supabaseClient'
 import type { GalaxyState, Glob, Cluster } from './types'
 import type { User } from '@supabase/supabase-js'
 import Galaxy from './Galaxy'
 import MobileApp from './MobileApp'
 import { useIsMobile } from './useIsMobile'
-import { AuthButton, CaptureBar, CloudIndicator, HomeButton, SaveIndicator, UndoRedoBar } from './AppChrome'
+import { AuthButton, CaptureBar, CloudIndicator, HomeButton, SaveIndicator, UndoRedoBar, VoiceOverlay } from './AppChrome'
+import { useVoiceCapture } from './useVoiceCapture'
 
 const MAX_UNDO = 40
 const REMOTE_SAVE_DELAY = 5000 // 5s debounce for cloud saves
@@ -14,10 +16,19 @@ const REMOTE_SAVE_DELAY = 5000 // 5s debounce for cloud saves
 export default function App() {
   const [state, setStateRaw] = useState<GalaxyState>(loadLocal)
   const inputRef = useRef<HTMLInputElement>(null)
-  const lastSavedRef = useRef<string>('')
+  // Seeded with the signature of what we just loaded, NOT ''. Otherwise the
+  // autosave interval sees a "change" two seconds after boot and stamps
+  // updated-at on a device that hasn't been touched — which is enough to make a
+  // brand-new install look like the freshest writer and refuse to pull.
+  const lastSavedRef = useRef<string>(stateSignature(state))
   const [showSaved, setShowSaved] = useState(false)
   const [user, setUser] = useState<User | null>(null)
-  const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'merged' | 'pulled' | 'error'>('idle')
+
+  // Always-current state for callbacks that fire outside React's render cycle
+  // (sync timers, focus/online listeners).
+  const stateRef = useRef(state)
+  useEffect(() => { stateRef.current = state }, [state])
   const [seenOnboarding, setSeenOnboarding] = useState<boolean>(hasSeenOnboarding)
   const remoteSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const needsRemoteSave = useRef(false)
@@ -34,19 +45,6 @@ export default function App() {
     return () => subscription.unsubscribe()
   }, [])
 
-  // On login: fetch remote state, prefer newest
-  useEffect(() => {
-    if (!user) return
-    loadRemote(supabase).then(remote => {
-      if (!remote) return
-      const localUpdatedAt = getLocalUpdatedAt()
-      if (!localUpdatedAt || remote.updatedAt > localUpdatedAt) {
-        setStateRaw(remote.state)
-        saveLocal(remote.state)
-      }
-    })
-  }, [user])
-
   const login = useCallback(() => {
     supabase.auth.signInWithOAuth({
       provider: 'github',
@@ -59,19 +57,126 @@ export default function App() {
     setUser(null)
   }, [])
 
+  const flash = useCallback((status: typeof cloudStatus) => {
+    setCloudStatus(status)
+    setTimeout(() => setCloudStatus('idle'), 1800)
+  }, [])
+
+  /** Take the cloud copy as this device's truth. */
+  const adoptRemote = useCallback((remote: RemoteState) => {
+    setStateRaw(remote.state)
+    saveLocal(remote.state)
+    lastSavedRef.current = stateSignature(remote.state)
+    // Inherit the cloud's stamp rather than claiming we edited just now.
+    touchLocal(remote.updatedAt)
+    needsRemoteSave.current = false
+    setDirty(false)
+  }, [])
+
+  /**
+   * Does the cloud copy win? Normally that's just "is it newer", but the first
+   * time a device ever sees the cloud row its local stamp isn't trustworthy — a
+   * fresh install stamps one the moment it boots. An untouched device therefore
+   * yields to the cloud; one holding real captures still defends them.
+   */
+  const cloudWins = useCallback((remote: RemoteState, local: GalaxyState) => {
+    if (remote.firstSight && isEmptyState(local)) return true
+    return isNewer(remote.updatedAt, getLocalUpdatedAt())
+  }, [])
+
+  /**
+   * Push the galaxy to the cloud, reconciling if the cloud moved ahead.
+   *
+   * Every outcome lands in the dirty flag, which is what makes a failed save
+   * recoverable after a reload instead of forgotten.
+   */
+  const push = useCallback(async (s: GalaxyState, force = false) => {
+    setCloudStatus('saving')
+    const result = await saveRemote(supabase, s, { force })
+
+    if (result === 'stale') {
+      // The cloud holds a version this device never read. Both copies may hold
+      // real thoughts, so union them instead of picking a winner.
+      const remote = await loadRemote(supabase)
+      if (!remote) { flash('error'); return }
+      // An untouched device has nothing worth merging; just take the cloud copy.
+      if (isEmptyState(stateRef.current)) {
+        adoptRemote(remote)
+        flash('pulled')
+        return
+      }
+      const merged = mergeStates(stateRef.current, remote.state)
+      setStateRaw(merged)
+      saveLocal(merged)
+      lastSavedRef.current = stateSignature(merged)
+      // Force past the compare-and-swap: we've just read the cloud's version and
+      // folded it in, so the merged copy is strictly the most complete one.
+      const after = await saveRemote(supabase, merged, { force: true })
+      const ok = after === 'saved'
+      needsRemoteSave.current = !ok
+      setDirty(!ok)
+      flash(ok ? 'merged' : 'error')
+      return
+    }
+
+    const ok = result === 'saved'
+    needsRemoteSave.current = !ok
+    setDirty(!ok)
+    flash(ok ? 'saved' : 'error')
+  }, [adoptRemote, flash])
+
   // Debounced remote save
   const scheduleRemoteSave = useCallback((s: GalaxyState) => {
     needsRemoteSave.current = true
+    setDirty(true)
     clearTimeout(remoteSaveTimer.current)
-    remoteSaveTimer.current = setTimeout(async () => {
+    remoteSaveTimer.current = setTimeout(() => {
       if (!needsRemoteSave.current) return
-      setCloudStatus('saving')
-      const ok = await saveRemote(supabase, s)
-      setCloudStatus(ok ? 'saved' : 'error')
-      if (ok) needsRemoteSave.current = false
-      setTimeout(() => setCloudStatus('idle'), 1500)
+      void push(s)
     }, REMOTE_SAVE_DELAY)
-  }, [])
+  }, [push])
+
+  /**
+   * Reconcile with the cloud. One entry point on purpose: the direction is
+   * decided by whether we're holding unsynced captures, so a pull and a push can
+   * never race and undo one another.
+   */
+  const sync = useCallback(async () => {
+    if (!navigator.onLine) return
+    if (isDirty()) {
+      clearTimeout(remoteSaveTimer.current)
+      needsRemoteSave.current = true
+      await push(stateRef.current)
+      return
+    }
+    const remote = await loadRemote(supabase)
+    if (remote && cloudWins(remote, stateRef.current)) {
+      adoptRemote(remote)
+      flash('pulled')
+    }
+  }, [adoptRemote, cloudWins, flash, push])
+
+  /**
+   * Sync on sign-in, when the tab comes back to the foreground, and the moment
+   * the network returns. That last one is what rescues thoughts captured on a
+   * pass with no bars: without it a failed save waits for the next edit.
+   */
+  useEffect(() => {
+    if (!user) return
+    const run = () => {
+      if (document.visibilityState === 'hidden') return
+      void sync()
+    }
+    run()
+    window.addEventListener('focus', run)
+    window.addEventListener('online', run)
+    document.addEventListener('visibilitychange', run)
+    return () => {
+      window.removeEventListener('focus', run)
+      window.removeEventListener('online', run)
+      document.removeEventListener('visibilitychange', run)
+    }
+  }, [user, sync])
 
   // Undo/redo stacks
   const undoStack = useRef<GalaxyState[]>([])
@@ -487,6 +592,49 @@ export default function App() {
   }, [setState])
 
   // Move an arbitrary set of globs into a brand-new cluster (cross-cluster transfer).
+  /**
+   * File a whole selection into an existing cluster in one step.
+   *
+   * Looping `moveGlobToCluster` would work but would push one undo snapshot per
+   * glob, so undoing a mis-filed batch of nine would take nine taps. Sorting a
+   * backlog is exactly when you want one clean undo.
+   */
+  const moveGlobsToCluster = useCallback((ids: string[], targetClusterId: string) => {
+    if (ids.length === 0) return
+    const set = new Set(ids)
+    setState(prev => {
+      if (!prev.clusters.some(c => c.id === targetClusterId)) return prev
+      // Preserve the order they appear in the list, not the order they were tapped.
+      const ordered = prev.globs.filter(g => set.has(g.id)).map(g => g.id)
+      return {
+        ...prev,
+        globs: prev.globs.map(g => set.has(g.id) ? { ...g, clusterId: targetClusterId } : g),
+        clusters: prev.clusters.map(c => {
+          const without = c.globIds.filter(id => !set.has(id))
+          if (c.id === targetClusterId) {
+            return { ...c, globIds: [...without, ...ordered], lastInteraction: Date.now() }
+          }
+          return without.length === c.globIds.length ? c : { ...c, globIds: without }
+        }),
+      }
+    })
+  }, [setState])
+
+  /** Flag or unflag a selection together (set-all: any unflagged → flag them all). */
+  const toggleFlagGlobs = useCallback((ids: string[]) => {
+    if (ids.length === 0) return
+    const set = new Set(ids)
+    setState(prev => {
+      const picked = prev.globs.filter(g => set.has(g.id))
+      if (picked.length === 0) return prev
+      const nextFlagged = !picked.every(g => g.flagged)
+      return {
+        ...prev,
+        globs: prev.globs.map(g => set.has(g.id) ? { ...g, flagged: nextFlagged } : g),
+      }
+    })
+  }, [setState])
+
   const transferToNewCluster = useCallback((ids: string[], name: string = 'new cluster') => {
     if (ids.length === 0) return
     const set = new Set(ids)
@@ -714,6 +862,13 @@ export default function App() {
     }))
   }, [])
 
+  /**
+   * One dictation session for the whole app. Owned here rather than inside each
+   * capture bar so the mobile and desktop layouts can never hold two open mic
+   * sessions between them.
+   */
+  const voice = useVoiceCapture(addGlob)
+
   // Handle input submit
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -738,6 +893,7 @@ export default function App() {
         <MobileApp
           state={state}
           onboardingActive={onboardingActive}
+          voice={voice}
           onAdd={addGlob}
           onToggleDone={toggleDone}
           onToggleTodo={toggleTodo}
@@ -754,6 +910,10 @@ export default function App() {
           onToggleAllTodosInCluster={toggleAllTodosInCluster}
           onDissolveCluster={dissolveCluster}
           onDeleteCluster={deleteCluster}
+          onMoveGlobsToCluster={moveGlobsToCluster}
+          onToggleFlagGlobs={toggleFlagGlobs}
+          onToggleAllTodosInGlobs={toggleAllTodosInGlobs}
+          onDeleteGlobs={deleteGlobs}
         />
         <AuthButton user={user} onLogin={login} onLogout={logout} />
         <SaveIndicator visible={showSaved} />
@@ -816,7 +976,9 @@ export default function App() {
         onboardingActive={onboardingActive}
         onKeyDown={handleKeyDown}
         onSend={handleSend}
+        voice={voice}
       />
+      <VoiceOverlay voice={voice} />
       <AuthButton user={user} onLogin={login} onLogout={logout} />
       <SaveIndicator visible={showSaved} />
       {user && cloudStatus !== 'idle' && <CloudIndicator status={cloudStatus} />}

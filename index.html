@@ -2,8 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover lets the app paint under the notch/home indicator;
+         the CSS pays that back with env(safe-area-inset-*) padding.
+         user-scalable=no because the galaxy and the list both handle their own
+         gestures — a pinch here only ever zooms the UI by accident. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
     <meta name="description" content="adhdo – a galaxy-brained todo app" />
+    <meta name="theme-color" content="#0a0a1a" />
+    <meta name="color-scheme" content="dark" />
+
+    <!-- Installed-app chrome: full-bleed on iOS, light status-bar glyphs. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="adhdo" />
+
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+
     <title>adhdo</title>
   </head>
   <body>

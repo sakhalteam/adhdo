@@ -1,5 +1,6 @@
 import type { KeyboardEvent, RefObject } from 'react'
 import type { User } from '@supabase/supabase-js'
+import type { VoiceCapture } from './useVoiceCapture'
 
 export function HomeButton() {
   return (
@@ -47,6 +48,9 @@ export function UndoRedoBar({
   onUndo: () => void
   onRedo: () => void
 }) {
+  // Nothing to undo yet means two dead buttons and, on a phone, a floating pill
+  // sitting on top of the list for no reason. Show up only once there's history.
+  if (undoLen === 0 && redoLen === 0) return null
   return (
     <div className="undo-redo-bar">
       <button
@@ -80,15 +84,18 @@ export function CaptureBar({
   onboardingActive,
   onKeyDown,
   onSend,
+  voice,
 }: {
   inputRef: RefObject<HTMLInputElement | null>
   onboardingActive: boolean
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
   onSend: () => void
+  voice: VoiceCapture
 }) {
   return (
-    <div className="capture-bar">
+    <div className={`capture-bar ${voice.supported ? 'has-mic' : ''}`}>
       <div className="capture-wrap">
+        {voice.supported && <MicButton voice={voice} />}
         <input
           ref={inputRef}
           type="text"
@@ -114,6 +121,59 @@ export function CaptureBar({
   )
 }
 
+export function MicButton({ voice }: { voice: VoiceCapture }) {
+  const on = voice.status === 'listening'
+  return (
+    <button
+      className={`capture-mic ${on ? 'on' : ''}`}
+      onClick={e => { e.stopPropagation(); voice.toggle() }}
+      aria-label={on ? 'Stop dictation' : 'Capture by voice'}
+      aria-pressed={on}
+      title={on ? 'Stop dictation' : 'Talk instead of typing — every sentence becomes a thought'}
+    >
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="9" y="2" width="6" height="11" rx="3" />
+        <path d="M5 11a7 7 0 0 0 14 0M12 18v4" />
+      </svg>
+    </button>
+  )
+}
+
+/**
+ * Live dictation readout, shared by both layouts.
+ *
+ * Deliberately large and low on the screen: during a hands-free session the
+ * question is only ever "is it still hearing me, and did that one land?", and
+ * that has to be answerable with a glance.
+ */
+export function VoiceOverlay({ voice }: { voice: VoiceCapture }) {
+  if (voice.status === 'listening') {
+    return (
+      <div className="voice-panel">
+        <div className="voice-panel-head">
+          <span className="voice-dot" />
+          listening
+          <span className="voice-banked">{voice.captured} captured</span>
+        </div>
+        <p className="voice-interim">{voice.interim || 'say anything…'}</p>
+        <button className="voice-stop" onClick={voice.stop}>Done</button>
+      </div>
+    )
+  }
+  if (voice.status === 'denied') {
+    return (
+      <div className="voice-error">
+        Microphone blocked. Enable it for this site in your browser settings — or use the
+        🎤 on your keyboard instead.
+      </div>
+    )
+  }
+  if (voice.status === 'error') {
+    return <div className="voice-error">Dictation stopped. Tap the mic to try again.</div>
+  }
+  return null
+}
+
 export function SaveIndicator({ visible }: { visible: boolean }) {
   return (
     <div className={`save-indicator ${visible ? 'visible' : ''}`}>
@@ -125,11 +185,20 @@ export function SaveIndicator({ visible }: { visible: boolean }) {
   )
 }
 
-export function CloudIndicator({ status }: { status: 'saving' | 'saved' | 'error' }) {
+/**
+ * 'pulled' = this device adopted a newer copy from the cloud.
+ * 'merged' = this device and the cloud had both moved on, and the two were
+ *            reconciled rather than one overwriting the other.
+ */
+export type CloudStatus = 'saving' | 'saved' | 'merged' | 'pulled' | 'error'
+
+export function CloudIndicator({ status }: { status: CloudStatus }) {
   return (
     <div className={`cloud-indicator ${status}`}>
       {status === 'saving' && 'syncing...'}
       {status === 'saved' && 'cloud synced'}
+      {status === 'merged' && 'merged with cloud'}
+      {status === 'pulled' && 'loaded from cloud'}
       {status === 'error' && 'sync failed'}
     </div>
   )

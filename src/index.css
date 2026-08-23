@@ -1665,7 +1665,7 @@ body {
   letter-spacing: 0.06em;
   color: var(--muted);
 }
-.mobile-section-head.cluster {
+.mobile-section-head.is-cluster {
   cursor: pointer;
   text-transform: none;
   letter-spacing: 0;
@@ -1677,7 +1677,7 @@ body {
 .mobile-chevron { flex: 0 0 auto; transition: transform 0.2s; color: var(--cluster-color, var(--muted)); }
 .mobile-chevron.open { transform: rotate(90deg); }
 .mobile-section-name { flex: 0 1 auto; }
-.mobile-section-name.cluster {
+.mobile-section-name.is-cluster {
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
@@ -1912,3 +1912,314 @@ body {
     text-align: center;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 📱 INSTALLED-APP MOBILE
+ * Added when adhdo became a home-screen PWA. Installed on iOS the page paints
+ * edge to edge (viewport-fit=cover), so every fixed edge has to buy the notch
+ * and the home indicator back with env(safe-area-inset-*).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+
+/* Standalone has no browser chrome above it — without this the title sits
+   underneath the clock and the carrier bars. */
+.mobile-root .home-btn { top: calc(12px + var(--safe-t)); left: calc(12px + var(--safe-l)); }
+.mobile-root .auth-btn { top: calc(12px + var(--safe-t)); right: calc(12px + var(--safe-r)); }
+.mobile-head { padding-top: calc(14px + var(--safe-t)); }
+
+/* Select mode owns the header row, so the floating chrome would collide with
+   its Cancel / All buttons. */
+.mobile-root:has(.mobile-app.selecting) .home-btn,
+.mobile-root:has(.mobile-app.selecting) .auth-btn,
+.mobile-root:has(.mobile-app.selecting) .undo-redo-bar { display: none; }
+
+/* ── select-mode header ─────────────────────────────── */
+.mobile-head.select {
+  flex-direction: row;
+  justify-content: space-between;
+  padding-left: max(12px, var(--safe-l));
+  padding-right: max(12px, var(--safe-r));
+  gap: 10px;
+}
+.mobile-head-btn {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.mobile-head-btn:active { background: rgba(255, 255, 255, 0.12); }
+.mobile-select-count { font-size: 14px; font-weight: 600; color: var(--accent-bright); }
+
+/* ── triage tools: search + filter chips ────────────── */
+.mobile-tools {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px max(12px, var(--safe-l)) 8px max(12px, var(--safe-r));
+}
+.mobile-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.mobile-search input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 16px; /* under 16px and iOS zooms the page on focus */
+  -webkit-appearance: none;
+}
+.mobile-search input::-webkit-search-cancel-button { display: none; }
+.mobile-search-clear {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: none; cursor: pointer;
+  color: var(--muted); font-size: 20px; line-height: 1;
+}
+
+.mobile-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mobile-chips::-webkit-scrollbar { display: none; }
+.mobile-chip {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-chip.on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent-bright) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* ── list niceties ──────────────────────────────────── */
+.mobile-list { padding-left: max(12px, var(--safe-l)); padding-right: max(12px, var(--safe-r)); }
+.mobile-inbox-clear,
+.mobile-no-results {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 18px 12px;
+}
+
+/* ── selection ──────────────────────────────────────── */
+.mobile-item.selected {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: color-mix(in srgb, var(--accent-bright) 60%, transparent);
+}
+.mobile-check.select {
+  border-radius: 8px;
+  border-color: color-mix(in srgb, var(--accent-bright) 50%, transparent);
+}
+.mobile-check.select.on {
+  background: var(--accent);
+  border-color: var(--accent-bright);
+  color: #fff;
+}
+
+/* ── bulk action bar (replaces the capture bar in select mode) ── */
+.bulk-bar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 55;
+  display: flex;
+  gap: 8px;
+  padding: 12px max(14px, var(--safe-l)) calc(14px + var(--safe-b)) max(14px, var(--safe-r));
+  background: linear-gradient(0deg, rgba(10, 10, 26, 0.97) 60%, transparent);
+}
+.bulk-btn {
+  flex: 1;
+  min-height: 46px;
+  border-radius: 12px;
+  border: 1px solid var(--border-bright);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.bulk-btn:disabled { opacity: 0.35; }
+.bulk-btn.primary {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  border-color: var(--accent-bright);
+}
+.bulk-btn.danger {
+  color: #fecaca;
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+/* ── voice capture ──────────────────────────────────── */
+.capture-mic {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  cursor: pointer;
+  pointer-events: all;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.2s, background 0.2s, border-color 0.2s;
+}
+.capture-mic:active { transform: translateY(-50%) scale(0.94); }
+.capture-mic.on {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+  animation: micPulse 1.5s ease-in-out infinite;
+}
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 60%, transparent); }
+  50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--danger) 0%, transparent); }
+}
+/* Make room for the mic on the left of the round input. */
+.capture-bar.mobile .capture-input,
+.capture-bar.has-mic .capture-input { padding-left: 56px; }
+
+/* On a wide screen the readout tracks the capture bar rather than spanning the
+   whole window — a full-width band of text under an empty galaxy reads as an
+   error banner. */
+@media (min-width: 641px) {
+  .voice-panel, .voice-error {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(520px, calc(100vw - 48px));
+    bottom: 92px;
+  }
+}
+
+.voice-panel {
+  position: fixed;
+  left: max(12px, var(--safe-l));
+  right: max(12px, var(--safe-r));
+  bottom: calc(78px + var(--safe-b));
+  z-index: 56;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(19, 19, 37, 0.97);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  box-shadow: 0 18px 50px -20px rgba(0, 0, 0, 0.9);
+  animation: fadeIn 0.18s ease;
+}
+.voice-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.voice-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--danger);
+  animation: micPulse 1.5s ease-in-out infinite;
+}
+.voice-banked {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--success);
+  font-weight: 600;
+}
+/* Big, because the whole point is that it's readable at a glance. */
+.voice-interim {
+  margin: 8px 0 12px;
+  font-size: 18px;
+  line-height: 1.35;
+  color: var(--text);
+  min-height: 1.35em;
+  max-height: 4.05em;
+  overflow: hidden;
+}
+.voice-panel:has(.voice-interim:empty) .voice-interim { color: var(--muted); }
+.voice-stop {
+  width: 100%;
+  min-height: 46px;
+  border-radius: 12px;
+  border: 1px solid var(--border-bright);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.voice-error {
+  position: fixed;
+  left: max(12px, var(--safe-l));
+  right: max(12px, var(--safe-r));
+  bottom: calc(78px + var(--safe-b));
+  z-index: 56;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #fecaca;
+  background: rgba(19, 19, 37, 0.97);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  animation: fadeIn 0.18s ease;
+}
+
+/* ── action sheet: long cluster lists must scroll, not overflow ── */
+.mobile-sheet { padding-bottom: calc(8px + var(--safe-b)); }
+.mobile-sheet-rows { max-height: 46vh; overflow-y: auto; }
+
+/* Keep the capture bar clear of the home indicator. */
+.capture-bar.mobile { padding-bottom: calc(14px + var(--safe-b)); }
+
+/* The delete layer sits behind the row. An indented in-cluster row would
+   otherwise expose a red sliver down its left edge at rest, which reads as a
+   rendering bug — reveal it only once a swipe is actually under way. */
+.mobile-item-delete { opacity: 0; transition: opacity 0.12s; }
+.mobile-item-wrap.swiping .mobile-item-delete { opacity: 1; }
