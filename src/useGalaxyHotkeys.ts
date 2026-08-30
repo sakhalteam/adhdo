@@ -11,13 +11,12 @@ export function useGalaxyHotkeys({
   onLastGlobPrompt,
   onMergePrompt,
   onTrashConfirm,
+  onBulkTrashConfirm,
   onClusterTrashConfirm,
   onNewGlobPos,
   onToggleSearch,
   onCloseSearch,
   onClearFocusedCluster,
-  onPointerMode,
-  onSelectionMode,
 }: {
   onClose: () => void
   onClearConfirm: (value: boolean) => void
@@ -25,13 +24,12 @@ export function useGalaxyHotkeys({
   onLastGlobPrompt: (value: { globId: string; clusterId: string; x: number; y: number } | null) => void
   onMergePrompt: (value: { c1Id: string; c2Id: string; connectionId: string } | null) => void
   onTrashConfirm: (value: string | null) => void
+  onBulkTrashConfirm: (value: string[] | null) => void
   onClusterTrashConfirm: (value: string | null) => void
   onNewGlobPos: (value: { x: number; y: number } | null) => void
   onToggleSearch: () => void
   onCloseSearch: () => void
   onClearFocusedCluster: () => void
-  onPointerMode: () => void
-  onSelectionMode: () => void
 }) {
   useEffect(() => {
     const onEsc = (event: KeyboardEvent) => {
@@ -46,11 +44,11 @@ export function useGalaxyHotkeys({
       onLastGlobPrompt(null)
       onMergePrompt(null)
       onTrashConfirm(null)
+      onBulkTrashConfirm(null)
       onClusterTrashConfirm(null)
       onNewGlobPos(null)
       onCloseSearch()
       onClearFocusedCluster()
-      onPointerMode()
     }
 
     const onSearch = (event: KeyboardEvent) => {
@@ -60,25 +58,14 @@ export function useGalaxyHotkeys({
       }
     }
 
-    const onModeKey = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey) return
-      const active = document.activeElement as HTMLElement | null
-      if (isTypingTarget(active)) return
-
-      const key = event.key.toLowerCase()
-      if (key === 'm') onSelectionMode()
-      else if (key === 'v') onPointerMode()
-    }
-
     window.addEventListener('keydown', onEsc)
     window.addEventListener('keydown', onSearch)
-    window.addEventListener('keydown', onModeKey)
     return () => {
       window.removeEventListener('keydown', onEsc)
       window.removeEventListener('keydown', onSearch)
-      window.removeEventListener('keydown', onModeKey)
     }
   }, [
+    onBulkTrashConfirm,
     onClearConfirm,
     onClearFocusedCluster,
     onClose,
@@ -87,8 +74,6 @@ export function useGalaxyHotkeys({
     onLastGlobPrompt,
     onMergePrompt,
     onNewGlobPos,
-    onPointerMode,
-    onSelectionMode,
     onShakeDissolve,
     onToggleSearch,
     onTrashConfirm,

@@ -8,8 +8,7 @@ import {
   FreeGlob,
   GalaxyOverlays,
   GroupDragGhost,
-  MarqueeOverlay,
-  ModeTools,
+  MarqueeBand,
   NewClusterPromptModal,
   OnboardingLayer,
   type RecolorTarget,
@@ -37,6 +36,7 @@ interface Props {
   onToggleFlag: (id: string) => void
   onToggleTodo: (id: string) => void
   onToggleAllTodosInCluster: (clusterId: string) => void
+  onClearCompletedInCluster: (clusterId: string) => void
   onToggleDone: (id: string) => void
   onDuplicate: (id: string) => void
   onUpdatePos: (id: string, x: number, y: number) => void
@@ -74,7 +74,8 @@ export default function Galaxy({
   showOnboarding,
   onDismissOnboarding,
   state, updateGlobs, updateState,
-  onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleAllTodosInCluster, onToggleDone,
+  onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleAllTodosInCluster,
+  onClearCompletedInCluster, onToggleDone,
   onDuplicate, onUpdatePos,
   onCreateCluster, onConvertToCluster, onAddToCluster, onMoveGlobToCluster, onAddGlobToCluster, onRemoveFromCluster,
   onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
@@ -102,13 +103,12 @@ export default function Galaxy({
     selectedIds,
     setSelectedIds,
     clearSelection,
-    marqueeMode,
     marqueeRect,
-    setPointerMode,
-    setSelectionMode,
+    banding,
     startSelection,
     updateSelection,
     commitSelection,
+    cancelSelection,
   } = useMarqueeSelection()
   const [bulkCtx, setBulkCtx] = useState<{ x: number; y: number } | null>(null)
   /** Set when a carried selection is dropped on open space, pending a name. */
@@ -126,6 +126,8 @@ export default function Galaxy({
   } = useClusterReorder({ clusters, onMoveGlobToCluster, onReorderClusterGlobs })
   const [newGlobPos, setNewGlobPos] = useState<{ x: number; y: number } | null>(null)
   const [trashConfirm, setTrashConfirm] = useState<string | null>(null)
+  /** A whole selection dragged onto the trash, pending one confirm for the lot. */
+  const [bulkTrashConfirm, setBulkTrashConfirm] = useState<string[] | null>(null)
   const [shakeDissolve, setShakeDissolve] = useState<string | null>(null)
   const [clusterTrashConfirm, setClusterTrashConfirm] = useState<string | null>(null)
   const [connecting, setConnecting] = useState<{ fromClusterId: string; cursorX: number; cursorY: number } | null>(null)
@@ -161,7 +163,12 @@ export default function Galaxy({
     return () => clearTimeout(t)
   }, [highlightId])
 
-  const closeTransientUi = useCallback(() => {
+  /**
+   * Close menus/popovers but leave the selection alone. This runs on every
+   * window click, and the click that ends a rubber band is one of them — the
+   * old full-screen overlay used to swallow it, nothing does now.
+   */
+  const closeMenus = useCallback(() => {
     setContextMenu(null)
     setClusterCtx(null)
     setDissolveConfirm(null)
@@ -170,8 +177,14 @@ export default function Galaxy({
     setClusterBrowserOpen(false)
     setRecolorPopover(null)
     setBulkCtx(null)
+  }, [])
+
+  /** Esc: close everything AND drop the selection. */
+  const closeTransientUi = useCallback(() => {
+    closeMenus()
+    cancelSelection()
     clearSelection()
-  }, [clearSelection])
+  }, [closeMenus, cancelSelection, clearSelection])
 
   const {
     focusedClusterId,
@@ -194,6 +207,7 @@ export default function Galaxy({
     onLastGlobPrompt: setLastGlobPrompt,
     onMergePrompt: setMergePrompt,
     onTrashConfirm: setTrashConfirm,
+    onBulkTrashConfirm: setBulkTrashConfirm,
     onClusterTrashConfirm: setClusterTrashConfirm,
     onNewGlobPos: setNewGlobPos,
     onToggleSearch: () => {
@@ -205,8 +219,6 @@ export default function Galaxy({
       setSearchQ('')
     },
     onClearFocusedCluster: () => setFocusedClusterId(null),
-    onPointerMode: setPointerMode,
-    onSelectionMode: setSelectionMode,
   })
 
   const { results: searchResults, jumpToResult } = useGalaxySearch({
@@ -245,6 +257,7 @@ export default function Galaxy({
       clearSelection()
     },
     onDropOnEmpty: (ids, x, y) => setGroupPrompt({ ids, x, y }),
+    onDropOnTrash: ids => setBulkTrashConfirm(ids),
   })
 
   // Clears transient menus/popovers when a drag begins.
@@ -289,10 +302,26 @@ export default function Galaxy({
     setDissolveConfirm(null)
   }, [])
 
+  /**
+   * Right-click inside a live multi-selection acts on the whole set; anywhere
+   * else it's the ordinary single-glob menu. Free globs and cluster items share
+   * this so the rule doesn't drift between them.
+   */
+  const openGlobMenu = useCallback((e: React.MouseEvent, globId: string, inCluster: boolean) => {
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); e.stopPropagation(); return }
+    if (selectedIds.size > 1 && selectedIds.has(globId)) {
+      e.preventDefault(); e.stopPropagation()
+      setBulkCtx({ x: e.clientX, y: e.clientY })
+      setContextMenu(null); setClusterCtx(null); setRecolorPopover(null)
+      return
+    }
+    onCtx(e, globId, inCluster)
+  }, [onCtx, selectedIds])
+
   useEffect(() => {
-    window.addEventListener('click', closeTransientUi)
-    return () => window.removeEventListener('click', closeTransientUi)
-  }, [closeTransientUi])
+    window.addEventListener('click', closeMenus)
+    return () => window.removeEventListener('click', closeMenus)
+  }, [closeMenus])
   const freeGlobs = globs.filter(g => !g.clusterId)
   const clusterList = [...clusters].sort((a, b) => {
     const interactionDiff = b.lastInteraction - a.lastInteraction
@@ -310,7 +339,38 @@ export default function Galaxy({
   const onboardingClusterY = Math.min(Math.max(viewportH * 0.38, 180), viewportH - 220)
 
   return (
-    <div className="galaxy" onClick={e => {
+    <div
+      className={`galaxy ${banding ? 'banding' : ''} ${groupDrag.dragging ? 'group-dragging' : ''} ${selectedIds.size > 0 ? 'breathing' : ''}`}
+      // Capture phase, so a press that belongs to the selection is claimed
+      // before the glob or cluster underneath starts its own drag.
+      onPointerDownCapture={e => {
+        if (groupDrag.tryStart(e)) {
+          e.preventDefault()
+          e.stopPropagation()
+        }
+      }}
+      onPointerDown={e => {
+        // Only a plain press on the bare background starts a band; everything
+        // else on the galaxy is somebody's drag. This is what lets selection be
+        // modeless — no overlay to swallow the rest of the app.
+        if (e.button !== 0 || e.target !== e.currentTarget) return
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        // Bare press on empty space clears; Shift/Ctrl mean "adjust what I have".
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey) clearSelection()
+        startSelection(e)
+      }}
+      onPointerMove={e => {
+        if (!banding) return
+        updateSelection(e.clientX, e.clientY)
+      }}
+      onPointerUp={e => {
+        if (!banding) return
+        e.currentTarget.releasePointerCapture(e.pointerId)
+        commitSelection()
+      }}
+      onPointerCancel={cancelSelection}
+      onClick={e => {
       if (e.target !== e.currentTarget && !(e.target as HTMLElement).classList.contains('galaxy')) return
       setFocusedClusterId(null)
       setClusterBrowserOpen(false)
@@ -349,24 +409,14 @@ export default function Galaxy({
         onDisconnect={onDisconnectClusters}
       />
 
-      {marqueeMode && (
-        <MarqueeOverlay
-          rect={marqueeRect}
-          selectedIds={selectedIds}
-          onOpenBulkMenu={(x, y) => setBulkCtx({ x, y })}
-          onStartSelection={startSelection}
-          onUpdateSelection={updateSelection}
-          onCommitSelection={commitSelection}
-          onTryGroupDrag={groupDrag.tryStart}
-          groupDragging={groupDrag.dragging}
-        />
-      )}
+      {marqueeRect && <MarqueeBand rect={marqueeRect} />}
       {groupDrag.ghost && (
         <GroupDragGhost
           x={groupDrag.ghost.x}
           y={groupDrag.ghost.y}
           count={selectedIds.size}
           overCluster={groupDrag.hoverClusterId !== null}
+          overTrash={groupDrag.overTrash}
         />
       )}
       {groupPrompt && (
@@ -380,12 +430,6 @@ export default function Galaxy({
           onCancel={() => setGroupPrompt(null)}
         />
       )}
-      <ModeTools
-        marqueeMode={marqueeMode}
-        onSetPointerMode={setPointerMode}
-        onSetMarqueeMode={setSelectionMode}
-      />
-
       <ClusterTools
         clusterCount={clusters.length}
         browserOpen={clusterBrowserOpen}
@@ -423,7 +467,7 @@ export default function Galaxy({
             onConvertToCluster(globId)
             onToggleTodo(globId)
           }}
-          onOpenMenu={(e, globId) => onCtx(e, globId, false)}
+          onOpenMenu={(e, globId) => openGlobMenu(e, globId, false)}
           onStartEditing={() => setEditingId(g.id)}
           onUpdateText={text => onUpdateText(g.id, text)}
           onCancelEditing={() => setEditingId(null)}
@@ -591,16 +635,7 @@ export default function Galaxy({
               }
               setDragReorder(null)
             }}
-            onOpenGlobContextMenu={(e, glob) => {
-              if (e.ctrlKey || e.metaKey) { e.preventDefault(); e.stopPropagation(); return }
-              if (selectedIds.size > 1 && selectedIds.has(glob.id)) {
-                e.preventDefault(); e.stopPropagation()
-                setBulkCtx({ x: e.clientX, y: e.clientY })
-                setContextMenu(null); setClusterCtx(null); setRecolorPopover(null)
-                return
-              }
-              onCtx(e, glob.id, true)
-            }}
+            onOpenGlobContextMenu={(e, glob) => openGlobMenu(e, glob.id, true)}
             onActivateAdd={() => { setFocusedClusterId(c.id); setAddingToClusterId(c.id) }}
             onAddGlob={text => onAddGlobToCluster(text, c.id)}
             onCancelAdd={() => setAddingToClusterId(null)}
@@ -619,7 +654,9 @@ export default function Galaxy({
         newGlobPos={newGlobPos}
         draggingFreeGlob={draggingFreeGlob}
         draggingClusterId={draggingClusterId}
+        groupDragging={groupDrag.dragging}
         trashConfirm={trashConfirm}
+        bulkTrashConfirm={bulkTrashConfirm}
         clusterTrashConfirm={clusterTrashConfirm}
         shakeDissolve={shakeDissolve}
         lastGlobPrompt={lastGlobPrompt}
@@ -637,6 +674,7 @@ export default function Galaxy({
         onSetRecolorPopover={setRecolorPopover}
         onSetNewGlobPos={setNewGlobPos}
         onSetTrashConfirm={setTrashConfirm}
+        onSetBulkTrashConfirm={setBulkTrashConfirm}
         onSetClusterTrashConfirm={setClusterTrashConfirm}
         onSetShakeDissolve={setShakeDissolve}
         onSetLastGlobPrompt={setLastGlobPrompt}
@@ -653,6 +691,7 @@ export default function Galaxy({
         onToggleTodo={onToggleTodo}
         onToggleAllTodosInCluster={onToggleAllTodosInCluster}
         onToggleAllTodosInGlobs={onToggleAllTodosInGlobs}
+        onClearCompletedInCluster={onClearCompletedInCluster}
         onToggleClusterCollapse={onToggleClusterCollapse}
         onDuplicate={onDuplicate}
         onRecolor={onRecolor}

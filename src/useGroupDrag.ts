@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
+import { isOverTrash } from './trashZone'
 
 /*
  * Drag a marquee selection somewhere as one thing.
  *
  * Once you've rubber-banded a handful of thoughts, the obvious next move is to
- * grab them and put them where they belong. That gesture had nowhere to live:
- * in marquee mode `.marquee-overlay` covers the galaxy and swallows every
- * pointerdown into "start a new rubber band", so a drag from a selected item
- * just threw the selection away and drew a new box.
- *
- * So the overlay asks here first. If the press landed on something already
- * selected, this takes the gesture; otherwise it declines and the marquee
- * behaves exactly as before.
+ * grab them and put them where they belong. The galaxy offers this hook first
+ * refusal on every press: if it landed on something already selected, the whole
+ * selection travels; otherwise it declines and the press falls through to the
+ * normal single-item drag (or, on empty space, to a new rubber band).
  *
  * The globs themselves never move during the drag. Dragging six blobs around
  * the physics sim to find out you dropped them badly is a lot of motion for no
@@ -28,20 +25,26 @@ export interface GroupDragState {
   ghost: { x: number; y: number } | null
   /** Cluster currently under the cursor, to light up as the drop target. */
   hoverClusterId: string | null
+  /** Cursor is over the trash zone — the drop will delete the whole selection. */
+  overTrash: boolean
 }
 
 export function useGroupDrag({
   selectedIds,
   onDropIntoCluster,
   onDropOnEmpty,
+  onDropOnTrash,
 }: {
   selectedIds: Set<string>
   onDropIntoCluster: (ids: string[], clusterId: string) => void
   /** Drop landed on open space — caller prompts for a new cluster name. */
   onDropOnEmpty: (ids: string[], x: number, y: number) => void
+  /** Drop landed on the trash — caller confirms deleting the whole selection. */
+  onDropOnTrash: (ids: string[]) => void
 }) {
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null)
   const [hoverClusterId, setHoverClusterId] = useState<string | null>(null)
+  const [overTrash, setOverTrash] = useState(false)
 
   // Refs, because the window listeners below are registered once per drag and
   // must not close over stale state.
@@ -51,6 +54,8 @@ export function useGroupDrag({
   onDropIntoClusterRef.current = onDropIntoCluster
   const onDropOnEmptyRef = useRef(onDropOnEmpty)
   onDropOnEmptyRef.current = onDropOnEmpty
+  const onDropOnTrashRef = useRef(onDropOnTrash)
+  onDropOnTrashRef.current = onDropOnTrash
   const cleanupRef = useRef<(() => void) | null>(null)
 
   const endDrag = useCallback(() => {
@@ -58,6 +63,7 @@ export function useGroupDrag({
     cleanupRef.current = null
     setGhost(null)
     setHoverClusterId(null)
+    setOverTrash(false)
   }, [])
 
   useEffect(() => endDrag, [endDrag])
@@ -91,6 +97,8 @@ export function useGroupDrag({
    */
   const tryStart = useCallback((event: ReactPointerEvent<HTMLDivElement>): boolean => {
     if (selectedRef.current.size < 2) return false
+    // ⌃/⌘/Shift+click still mean what they always meant on an item.
+    if (event.ctrlKey || event.metaKey || event.shiftKey) return false
     if (!selectedItemAt(event.clientX, event.clientY)) return false
 
     const startX = event.clientX
@@ -102,18 +110,23 @@ export function useGroupDrag({
         if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD) return
         armed = true
       }
+      const trashed = isOverTrash(e.clientX, e.clientY)
       setGhost({ x: e.clientX, y: e.clientY })
-      setHoverClusterId(clusterAt(e.clientX, e.clientY))
+      setOverTrash(trashed)
+      // The trash sits over the galaxy, so a cluster underneath it must not win.
+      setHoverClusterId(trashed ? null : clusterAt(e.clientX, e.clientY))
     }
 
     const onUp = (e: PointerEvent) => {
       const wasDragging = armed
-      const target = wasDragging ? clusterAt(e.clientX, e.clientY) : null
+      const trashed = wasDragging && isOverTrash(e.clientX, e.clientY)
+      const target = wasDragging && !trashed ? clusterAt(e.clientX, e.clientY) : null
       const ids = [...selectedRef.current]
       endDrag()
       // A press that never moved is just a click; leave the selection alone.
       if (!wasDragging) return
-      if (target) onDropIntoClusterRef.current(ids, target)
+      if (trashed) onDropOnTrashRef.current(ids)
+      else if (target) onDropIntoClusterRef.current(ids, target)
       else onDropOnEmptyRef.current(ids, e.clientX, e.clientY)
     }
 
@@ -134,5 +147,5 @@ export function useGroupDrag({
     return true
   }, [endDrag])
 
-  return { ghost, hoverClusterId, dragging: ghost !== null, tryStart }
+  return { ghost, hoverClusterId, overTrash, dragging: ghost !== null, tryStart }
 }

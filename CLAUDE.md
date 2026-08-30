@@ -45,18 +45,23 @@ way, and never give a mobile element a bare galaxy class name.
 - Drag-to-trash (bottom-right), shake-to-dissolve, drag item outside cluster to release
 - Context menus: glob (edit/flag/todo/duplicate/recolor/delete), cluster (rename/collapse/convert-all-to-todos/recolor-border/recolor-all-items/dissolve/delete — opens from right-click on header, drag handle, OR border; "delete" reuses the trash-drop confirm toast so user can still pick "release globs" instead), empty space (create glob)
 - Recolor uses a swatch popover (PALETTE exported from store.ts, 6×2 grid). Glob recolor sets the glob's color. Cluster recolor border affects only the cluster's border. Cluster recolor all items repaints every item in the cluster (items keep no relation to the border).
-- **Marquee selection tool** (Adobe/Blender-style):
-  - Left-edge tool column with pointer (V) and marquee (M) buttons.
-  - `M` enters marquee mode; `V` or `Esc` exits. Clicking the buttons does the same.
-  - In marquee mode: click+drag draws a violet dashed rect. Any item whose bounding rect intersects is selected.
-  - No modifier = replace selection. **Shift+drag** = add. **Ctrl/Cmd+drag** = remove (Blender-style).
-  - Selected items get the maximalist visual: cluster-color-tinted background + cluster-color border + 5px left accent + pulsing glow (via `--cluster-color` CSS var).
-  - Right-click on any selected item (when >1 selected) opens the **bulk-action context menu**: convert all to todos / recolor all (opens swatch popover with `bulk` target) / **transfer to new cluster** (creates a fresh cluster from the selection, removing items from their source clusters) / delete all.
+- **Rubber-band selection — no mode** (reworked 2026-08-29):
+  - **There is no tool column and no V/M modes any more.** They existed only because `.marquee-overlay` was a full-screen z-250 div that swallowed every pointerdown; an overlay you have to opt into *is* a mode. Deleting the overlay deleted the mode.
+  - `.galaxy` now routes its own presses: `onPointerDown` starts a band **only when `e.target === e.currentTarget`** (bare background) and `e.button === 0`, then `setPointerCapture`s itself. Anything else on the galaxy is somebody's drag and falls through untouched.
+  - A bare press on background clears the selection *on pointerdown* — not on click. The click that ends a band would otherwise wipe what it just selected (the overlay used to eat it). For the same reason the window-click listener is **`closeMenus`** (menus only); `closeTransientUi` (menus + selection) is Esc's.
+  - Modifiers on the band: none = replace, **Shift** = add, **Ctrl/Cmd** = remove (Blender-style).
+  - Selected items get the maximalist visual: cluster-color-tinted background + cluster-color border + 5px left accent + a glow that **breathes on one shared clock** (see below).
+  - Right-click inside a live multi-selection opens the **bulk-action context menu**: convert all to todos / recolor all (opens swatch popover with `bulk` target) / **transfer to new cluster** (creates a fresh cluster from the selection, removing items from their source clusters) / delete all. Free globs and cluster items share one `openGlobMenu` helper in Galaxy.tsx so the rule can't drift between them — this used to live on the overlay, which meant free globs never got it.
   - `App.tsx` exposes the bulk primitives: `recolorGlobs`, `toggleAllTodosInGlobs`, `deleteGlobs`, `transferToNewCluster`, `moveGlobsToCluster`.
-  - **Carry the selection** (`useGroupDrag.ts`, 2026-08-22): press on any *already selected* item and drag to move the whole selection. `.marquee-overlay` covers the galaxy and swallows every pointerdown into "start a new rubber band", so the overlay now offers each press to `tryStart()` first; it takes the gesture only when the press landed on a selected item, otherwise declines and the marquee behaves exactly as before. The globs never move — a `GroupDragGhost` (stack icon + count) follows the cursor and the drop is what mutates. Drop on a cluster → `moveGlobsToCluster` + `.group-target` glow; drop on empty space → `NewClusterPromptModal` → `transferToNewCluster(ids, name, {x, y})`. Hit-testing uses `document.elementsFromPoint` (plural) so nothing needs its `pointer-events` toggled mid-gesture. `Esc` cancels.
+  - **Carry the selection** (`useGroupDrag.ts`): press on any *already selected* item and drag to move the whole selection. `.galaxy` offers every press to `tryStart()` **in the capture phase**, so the gesture is claimed before the glob or cluster underneath starts its own drag; it declines unless ≥2 are selected and the press landed on a selected item, and it declines outright when ⌃/⌘/Shift is held so those shortcuts keep their meaning. The globs never move — a `GroupDragGhost` (stack icon + count) follows the cursor and the drop is what mutates. Three drop targets: a cluster → `moveGlobsToCluster` + `.group-target` glow; the **trash** → one `TrashConfirmToast` for the whole set → `deleteGlobs` (checked *before* `clusterAt`, since the trash floats over the galaxy); empty space → `NewClusterPromptModal` → `transferToNewCluster(ids, name, {x, y})`. Hit-testing uses `document.elementsFromPoint` (plural) so nothing needs its `pointer-events` toggled mid-gesture. `Esc` cancels.
+  - ⚠️ **A multi-selected cluster item sets `draggable={false}`.** Its native HTML5 drag would otherwise race the carry gesture, and `pointerdown.stopPropagation()` cannot cancel a `dragstart`. This is why dragging a selection to the trash trashes *all* of it instead of only the row you happened to grab.
   - **`data-glob-id` used to be on cluster items only**, so the marquee could not see free-floating globs at all — you could only ever rubber-band things already inside a cluster, which is backwards. `FreeGlob` now carries it (and a `selected` class).
 - **Cluster z-order: click-to-front like Windows.** Clusters rank by `lastInteraction` (already updated on drag/rename/edit/etc.), highest rank = highest z-index. Touching any cluster brings it to the foreground. Hover does NOT promote (would cause z-thrashing).
 - Click anywhere inside a cluster item enters edit mode (was: only the text span). Drag-and-hold still becomes a reorder/pop-out drag via HTML5 dragstart.
+- **Double-click a cluster item's *handle gutter* → toggles it to a to-do.** Not just the 16px grip icon (which only fades in on hover — too much to aim at in passing). `isHandleZone()` in GalaxyChrome.tsx measures the row's own box: the whole strip from the left edge through the grip plus `GRIP_SLACK` (5px) toward the text, **and** a `RIGHT_GUTTER` (24px) square at the right border, both full row height. Excluded by target, in this order: `.todo-check` (keeps its own job, and it sits inside the left gutter once the row *is* a to-do), `.cluster-glob-grip` (always in), `.cluster-glob-text-inner` — on the words themselves a click means "edit these words", at either end.
+  - The row's `onClick` must **return early in the same zone**, or the first of the two clicks swaps the row for an `<input>` and the `dblclick` never lands. Cost: a single click in the gutter now does nothing instead of opening the editor. Deliberate.
+  - **`.cluster-edge-hit.left/right` were re-biased outward** (`left/right: -8px; width: 10px`, was `-6px`/`12px`) so they reach 8px *outside* the card and only 2px inside. Otherwise they sat over the outer 6px of every row at `z-index: 2` and ate the gutter's best part. All three cluster handles live outside the left edge and nothing lives outside the right, so widening outward is free — but the border must stay grabbable, which `scripts/group-drag-check.mjs` asserts on both sides.
+- **Cluster context menu → "🧹 Clear completed (n)"** deletes the ticked-off to-dos in that cluster in one undo step. Disabled at `n === 0`, and `clearCompletedInCluster` returns `prev` untouched in that case so an empty sweep pushes no undo snapshot.
 - Context menus + recolor popover clamp to viewport so they never clip off-screen.
 - Todo mode with checkboxes, done state (line-through)
 - Ctrl/Cmd+click shortcut: on a free glob → auto-clusters it + toggles todo; on a cluster item → toggles todo; on the cluster body (anywhere not an item) → toggles ALL items as todos (set-all semantics: if any item isn't a todo, all become todos; if all are todos, all flip back). Suppresses macOS native ctrl+click contextmenu so the shortcut wins.
@@ -79,6 +84,25 @@ way, and never give a mobile element a bare galaxy class name.
 - `repairState()` makes `cluster.globIds` (authoritative, ordered) and `glob.clusterId` agree. Without it a glob claiming a cluster that doesn't list it renders in *neither* the unsorted list nor the cluster — invisible but present. Runs on every hydrate, so it also heals old blobs.
 - Dirty flag persists in localStorage (`adhdo-dirty`) so a save that failed with no signal retries after a reload. One `sync()` entry point — dirty pushes (merging on stale), clean pulls — fired on login, focus, visibilitychange and **`online`**. The old split pull/push effects could race.
 
+## ⚠️ One breathing clock, not N animations (2026-08-29)
+
+Selected things pulse off a single animated custom property, **not** a per-element
+`animation`. A CSS animation starts its clock the moment the class lands, so five items
+picked up at five different moments breathed five different ways, and adding a sixth
+made it worse. Instead `@property --breath { syntax: "<number>"; inherits: true }` is
+animated once on `.galaxy.breathing` (4.4s ease-in-out, 0 → 1 → 0) and **inherited** by
+every descendant; `.cluster-glob-item.selected` and `.glob.selected` interpolate their
+own `box-shadow`/tint out of it with `calc()` inside `color-mix()`. Anything joining the
+selection is already in time with its sisters, for free, with no JS ticker.
+
+Two traps if you touch this:
+- `.glob` sets `transition: box-shadow 0.25s`. `.glob.selected` **must** drop box-shadow
+  from that transition or the glow lags and the blob falls out of step with the cluster
+  items breathing beside it.
+- A malformed `calc()` inside `color-mix()` doesn't warn — the whole `box-shadow`
+  silently computes to `none`. `scripts/group-drag-check.mjs` asserts the shadow both
+  resolves and moves.
+
 ## ⚠️ Local autosave and the physics loop
 
 The autosave effect must **read `stateRef.current` with an empty dep array**. It used to
@@ -91,10 +115,20 @@ is what keeps the write itself cheap.
 
 ## Testing
 
-`node scripts/group-drag-check.mjs` — 23 assertions for the marquee → carry-selection
-gesture (both drop targets, the naming modal, cluster placement at the drop point, and
-that a plain rubber band still works). Note it clicks the marquee **tool button** rather
-than pressing `M`: the capture bar autofocuses, so the keystroke just types into it.
+`node scripts/group-drag-check.mjs` — 76 assertions covering the band → carry-selection
+gesture (all three drop targets: cluster / trash / empty space, the naming modal, cluster
+placement at the drop point), clear-completed, the handle-gutter zone boundaries plus the
+cluster borders they were widened out of, that modeless routing still lets a lone glob and
+a cluster drag normally, and that the breathing clock runs and is shared. It just drags
+from empty space — there is no tool button to click, and pressing `M` would only type into
+the autofocused capture bar.
+
+⚠️ **`stateSignature` ignores x/y/velocity, so a drag alone never reaches
+localStorage.** Assert positions against the DOM (`boundingBox()`), not the saved state.
+
+⚠️ **Probe the handle gutter by asserting the *flip*, not the absolute state.** Once a
+row is a to-do the checkbox moves into the left gutter, so "double-click the same spot
+again" is not a valid way to reset between probes — the right square always is.
 
 `node scripts/smoke.mjs` — 20 end-to-end assertions (capture, voice button, long-press select, bulk file, single-undo-per-batch, search, filters, swipe-delete, scroll-doesn't-delete, state repair, desktop galaxy intact). Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`.
 

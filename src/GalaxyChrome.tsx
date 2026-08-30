@@ -41,75 +41,25 @@ export type MarqueeRect = {
   y2: number
 }
 
-export function MarqueeOverlay({
-  rect,
-  selectedIds,
-  onOpenBulkMenu,
-  onStartSelection,
-  onUpdateSelection,
-  onCommitSelection,
-  onTryGroupDrag,
-  groupDragging,
-}: {
-  rect: MarqueeRect | null
-  selectedIds: Set<string>
-  onOpenBulkMenu: (x: number, y: number) => void
-  onStartSelection: (event: PointerEvent<HTMLDivElement>) => void
-  onUpdateSelection: (x: number, y: number) => void
-  onCommitSelection: (event: PointerEvent<HTMLDivElement>) => void
-  /** Offered first refusal on every press; true means it took the gesture. */
-  onTryGroupDrag: (event: PointerEvent<HTMLDivElement>) => boolean
-  groupDragging: boolean
-}) {
+/**
+ * The rubber band itself, and nothing else.
+ *
+ * This used to be a full-screen `.marquee-overlay` that swallowed every
+ * pointerdown — which is exactly why selecting had to be a *mode* you entered
+ * with M and left with V. The galaxy now routes presses on its own background
+ * straight to the selection hook, so all that is left to draw is the box.
+ */
+export function MarqueeBand({ rect }: { rect: MarqueeRect }) {
   return (
     <div
-      className={`marquee-overlay ${groupDragging ? 'group-dragging' : ''}`}
-      onClick={e => e.stopPropagation()}
-      onContextMenu={e => {
-        e.preventDefault()
-        e.stopPropagation()
-        if (selectedIds.size < 2) return
-        for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
-          const item = (el as HTMLElement).closest('[data-glob-id]') as HTMLElement | null
-          if (!item) continue
-          const id = item.dataset.globId
-          if (id && selectedIds.has(id)) {
-            onOpenBulkMenu(e.clientX, e.clientY)
-            return
-          }
-        }
+      className="marquee-rect"
+      style={{
+        left: Math.min(rect.x1, rect.x2),
+        top: Math.min(rect.y1, rect.y2),
+        width: Math.abs(rect.x2 - rect.x1),
+        height: Math.abs(rect.y2 - rect.y1),
       }}
-      onPointerDown={e => {
-        e.preventDefault()
-        e.stopPropagation()
-        // Pressing on something already selected means "pick these up", not
-        // "throw the selection away and start a new box".
-        if (onTryGroupDrag(e)) return
-        ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-        onStartSelection(e)
-      }}
-      onPointerMove={e => {
-        if (!rect) return
-        onUpdateSelection(e.clientX, e.clientY)
-      }}
-      onPointerUp={e => {
-        if (!rect) return
-        ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
-        onCommitSelection(e)
-      }}
-    >
-      {rect && (
-        <div
-          className="marquee-rect"
-          style={{
-            left: Math.min(rect.x1, rect.x2),
-            top: Math.min(rect.y1, rect.y2),
-            width: Math.abs(rect.x2 - rect.x1),
-            height: Math.abs(rect.y2 - rect.y1),
-          }}
-        />
-      )}
-    </div>
+    />
   )
 }
 
@@ -125,20 +75,25 @@ export function GroupDragGhost({
   y,
   count,
   overCluster,
+  overTrash,
 }: {
   x: number
   y: number
   count: number
   overCluster: boolean
+  overTrash: boolean
 }) {
   return (
-    <div className={`group-ghost ${overCluster ? 'over-cluster' : ''}`} style={{ left: x, top: y }}>
+    <div
+      className={`group-ghost ${overCluster ? 'over-cluster' : ''} ${overTrash ? 'over-trash' : ''}`}
+      style={{ left: x, top: y }}
+    >
       <span className="group-ghost-stack" aria-hidden="true">
         <i /><i /><i />
       </span>
       <span className="group-ghost-count">{count}</span>
       <span className="group-ghost-label">
-        {overCluster ? 'drop to file here' : 'drop to make a cluster'}
+        {overTrash ? 'drop to delete all' : overCluster ? 'drop to file here' : 'drop to make a cluster'}
       </span>
     </div>
   )
@@ -468,41 +423,6 @@ export function ConnectionLayer({
         )
       })()}
     </>
-  )
-}
-
-export function ModeTools({
-  marqueeMode,
-  onSetPointerMode,
-  onSetMarqueeMode,
-}: {
-  marqueeMode: boolean
-  onSetPointerMode: () => void
-  onSetMarqueeMode: () => void
-}) {
-  return (
-    <div className="mode-tools" onClick={e => e.stopPropagation()}>
-      <button
-        className={`cluster-tool-btn ${!marqueeMode ? 'active' : ''}`}
-        onClick={onSetPointerMode}
-        title="Pointer mode (V)"
-        aria-label="Pointer mode"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M5 3l6 16 2-7 7-2z" />
-        </svg>
-      </button>
-      <button
-        className={`cluster-tool-btn ${marqueeMode ? 'active' : ''}`}
-        onClick={onSetMarqueeMode}
-        title="Marquee select (M) — click and drag to select; Shift+drag adds, Ctrl+drag removes"
-        aria-label="Marquee select tool"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <rect x="3" y="3" width="18" height="18" rx="1" strokeDasharray="3 3" />
-        </svg>
-      </button>
-    </div>
   )
 }
 
@@ -843,6 +763,38 @@ export function ClusterAddControl({
   )
 }
 
+/*
+ * The handle gutter: where a double-click flips a row to a to-do.
+ *
+ * The grip icon is ~16px wide and only fades in on hover, which is a lot of
+ * aim to ask for on the way past. So the gesture is measured from the row's own
+ * box instead of that one small child: the whole strip left of the grip (out to
+ * the cluster border you are already sweeping along), a few px past it toward
+ * the text, and a matching square at the right border. Full row height, both
+ * ends, so you can flick at either edge without looking.
+ *
+ * The outer ~6px of each side is NOT ours — `.cluster-edge-hit.left/right` sit
+ * over it at z-index 2 so the cluster stays draggable by its border. Those
+ * simply take the event and this handler never sees it, which is why there is
+ * no left bound below: the strip we can reach is exactly the strip we get.
+ */
+/** How far past the grip the zone reaches, toward (but never onto) the text. */
+const GRIP_SLACK = 5
+/** The square at the row's right border. */
+const RIGHT_GUTTER = 24
+
+function isHandleZone(event: MouseEvent<HTMLDivElement>): boolean {
+  const target = event.target as HTMLElement
+  // The checkbox lives inside the left gutter and keeps its own job.
+  if (target.closest('.todo-check')) return false
+  if (target.closest('.cluster-glob-grip')) return true
+  // On the words themselves a click means "edit these words", at either end.
+  if (target.closest('.cluster-glob-text-inner')) return false
+  const grip = event.currentTarget.querySelector('.cluster-glob-grip')
+  if (grip && event.clientX <= grip.getBoundingClientRect().right + GRIP_SLACK) return true
+  return event.clientX >= event.currentTarget.getBoundingClientRect().right - RIGHT_GUTTER
+}
+
 export function ClusterItemRow({
   glob,
   editing,
@@ -893,10 +845,17 @@ export function ClusterItemRow({
           onToggleTodo()
           return
         }
-        if (!editing) {
-          e.stopPropagation()
-          onStartEditing()
-        }
+        if (editing) return
+        // The gutter belongs to the double-click below: opening the editor on
+        // the first of the two clicks would swap the DOM out from under it.
+        if (isHandleZone(e)) return
+        e.stopPropagation()
+        onStartEditing()
+      }}
+      onDoubleClick={e => {
+        if (editing || !isHandleZone(e)) return
+        e.stopPropagation()
+        onToggleTodo()
       }}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -912,7 +871,9 @@ export function ClusterItemRow({
           {glob.done ? '✓' : ''}
         </button>
       )}
-      <div className="cluster-glob-grip" title="Drag to reorder"><GripIcon size={12} /></div>
+      <div className="cluster-glob-grip" title="Drag to reorder · double-click either edge to make it a to-do">
+        <GripIcon size={12} />
+      </div>
       {editing ? (
         <input
           className="glob-edit inline"
@@ -1072,7 +1033,7 @@ export function ClusterCard({
               dragOver={dragOverGlobId === glob.id}
               highlighted={highlightedId === glob.id}
               selected={selectedIds.has(glob.id)}
-              draggable={editingGlobId !== glob.id}
+              draggable={editingGlobId !== glob.id && !(selectedIds.size > 1 && selectedIds.has(glob.id))}
               onToggleTodo={() => onToggleGlobTodo(glob.id)}
               onToggleDone={() => onToggleGlobDone(glob.id)}
               onStartEditing={() => onStartGlobEditing(glob.id)}
@@ -1149,10 +1110,12 @@ export function ClusterContextMenu({
   cluster,
   itemCount,
   allAreTodos,
+  completedCount,
   menuRef,
   onRename,
   onToggleCollapse,
   onToggleAllTodos,
+  onClearCompleted,
   onRecolorBorder,
   onRecolorItems,
   onDissolve,
@@ -1163,10 +1126,13 @@ export function ClusterContextMenu({
   cluster: Cluster
   itemCount: number
   allAreTodos: boolean
+  /** Ticked-off to-dos in this cluster. Zero means the sweep has nothing to do. */
+  completedCount: number
   menuRef: (element: HTMLDivElement | null) => void
   onRename: () => void
   onToggleCollapse: () => void
   onToggleAllTodos: () => void
+  onClearCompleted: () => void
   onRecolorBorder: () => void
   onRecolorItems: () => void
   onDissolve: () => void
@@ -1184,6 +1150,9 @@ export function ClusterContextMenu({
       <button disabled={itemCount === 0} onClick={onToggleAllTodos}>
         {allAreTodos ? '☑️ Remove all todos' : '☐ Convert all to todos'}
         <span className="ctx-shortcut">⌃/⌘+Click</span>
+      </button>
+      <button disabled={completedCount === 0} onClick={onClearCompleted}>
+        🧹 Clear completed{completedCount > 0 ? ` (${completedCount})` : ''}
       </button>
       <button onClick={onRecolorBorder}>🎨 Recolor border</button>
       <button disabled={itemCount === 0} onClick={onRecolorItems}>🎨 Recolor all items</button>
@@ -1493,8 +1462,9 @@ export function HelpPanel({
             <div className="help-item"><span className="help-action">Shake</span> a cluster to dissolve it</div>
             <div className="help-item"><span className="help-action">Drag</span> a glob or cluster to the trash (bottom-right)</div>
             <div className="help-item"><span className="help-action">Hold</span> a cluster over another (~0.75s) until it glows, then release to merge (you'll be asked for a new name)</div>
-            <div className="help-item"><kbd>M</kbd> for the marquee, then <span className="help-action">drag</span> a box to select several — <kbd>Shift</kbd> adds, <kbd>Ctrl</kbd> removes</div>
-            <div className="help-item"><span className="help-action">Drag</span> from any selected item to carry the whole selection: drop on a cluster to file it there, or on empty space to make a new one</div>
+            <div className="help-item"><span className="help-action">Drag</span> a box across empty space to select several — <kbd>Shift</kbd> adds, <kbd>Ctrl</kbd> removes</div>
+            <div className="help-item"><span className="help-action">Drag</span> from any selected item to carry the whole selection: drop on a cluster to file it there, on empty space to make a new one, or on the trash to bin the lot</div>
+            <div className="help-item"><span className="help-action">Double-click</span> the <span className="help-mono">&#x2807;</span> handle beside a cluster item to make it a to-do</div>
             <div className="help-item"><kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo</div>
             <div className="help-item"><kbd>Ctrl</kbd>+<kbd>K</kbd> to search, <kbd>Esc</kbd> to close menus</div>
           </div>
@@ -1578,7 +1548,9 @@ export function GalaxyOverlays({
   newGlobPos,
   draggingFreeGlob,
   draggingClusterId,
+  groupDragging,
   trashConfirm,
+  bulkTrashConfirm,
   clusterTrashConfirm,
   shakeDissolve,
   lastGlobPrompt,
@@ -1596,6 +1568,7 @@ export function GalaxyOverlays({
   onSetRecolorPopover,
   onSetNewGlobPos,
   onSetTrashConfirm,
+  onSetBulkTrashConfirm,
   onSetClusterTrashConfirm,
   onSetShakeDissolve,
   onSetLastGlobPrompt,
@@ -1612,6 +1585,7 @@ export function GalaxyOverlays({
   onToggleTodo,
   onToggleAllTodosInCluster,
   onToggleAllTodosInGlobs,
+  onClearCompletedInCluster,
   onToggleClusterCollapse,
   onDuplicate,
   onRecolor,
@@ -1645,7 +1619,9 @@ export function GalaxyOverlays({
   newGlobPos: { x: number; y: number } | null
   draggingFreeGlob: boolean
   draggingClusterId: string | null
+  groupDragging: boolean
   trashConfirm: string | null
+  bulkTrashConfirm: string[] | null
   clusterTrashConfirm: string | null
   shakeDissolve: string | null
   lastGlobPrompt: { globId: string; clusterId: string; x: number; y: number } | null
@@ -1663,6 +1639,7 @@ export function GalaxyOverlays({
   onSetRecolorPopover: (value: { x: number; y: number; target: RecolorTarget } | null) => void
   onSetNewGlobPos: (value: { x: number; y: number } | null) => void
   onSetTrashConfirm: (value: string | null) => void
+  onSetBulkTrashConfirm: (value: string[] | null) => void
   onSetClusterTrashConfirm: (value: string | null) => void
   onSetShakeDissolve: (value: string | null) => void
   onSetLastGlobPrompt: (value: { globId: string; clusterId: string; x: number; y: number } | null) => void
@@ -1679,6 +1656,7 @@ export function GalaxyOverlays({
   onToggleTodo: (id: string) => void
   onToggleAllTodosInCluster: (clusterId: string) => void
   onToggleAllTodosInGlobs: (ids: string[]) => void
+  onClearCompletedInCluster: (clusterId: string) => void
   onToggleClusterCollapse: (clusterId: string) => void
   onDuplicate: (id: string) => void
   onRecolor: (id: string, color?: string) => void
@@ -1714,6 +1692,7 @@ export function GalaxyOverlays({
         if (!cluster) return null
         const clusterItems = globs.filter(g => g.clusterId === cluster.id)
         const allAreTodos = clusterItems.length > 0 && clusterItems.every(g => g.isTodo)
+        const completedCount = clusterItems.filter(g => g.isTodo && g.done).length
         return (
           <ClusterContextMenu
             x={clusterCtx.x}
@@ -1721,10 +1700,12 @@ export function GalaxyOverlays({
             cluster={cluster}
             itemCount={clusterItems.length}
             allAreTodos={allAreTodos}
+            completedCount={completedCount}
             menuRef={clampMenuToViewport}
             onRename={() => { onSetEditingClusterId(cluster.id); onSetClusterCtx(null) }}
             onToggleCollapse={() => { onToggleClusterCollapse(cluster.id); onSetClusterCtx(null) }}
             onToggleAllTodos={() => { onToggleAllTodosInCluster(cluster.id); onSetClusterCtx(null) }}
+            onClearCompleted={() => { onClearCompletedInCluster(cluster.id); onSetClusterCtx(null) }}
             onRecolorBorder={() => {
               onSetRecolorPopover({ x: clusterCtx.x, y: clusterCtx.y, target: { kind: 'cluster-border', id: cluster.id } })
               onSetClusterCtx(null)
@@ -1833,7 +1814,7 @@ export function GalaxyOverlays({
         />
       )}
 
-      <TrashZone visible={draggingFreeGlob || !!draggingClusterId} />
+      <TrashZone visible={draggingFreeGlob || !!draggingClusterId || groupDragging} />
 
       {trashConfirm && (
         <TrashConfirmToast
@@ -1841,6 +1822,19 @@ export function GalaxyOverlays({
           confirmLabel="delete"
           onConfirm={() => { onDelete(trashConfirm); onSetTrashConfirm(null) }}
           onCancel={() => onSetTrashConfirm(null)}
+        />
+      )}
+
+      {bulkTrashConfirm && (
+        <TrashConfirmToast
+          label={`delete ${bulkTrashConfirm.length} thought${bulkTrashConfirm.length === 1 ? '' : 's'}?`}
+          confirmLabel="delete all"
+          onConfirm={() => {
+            onDeleteGlobs(bulkTrashConfirm)
+            onSetBulkTrashConfirm(null)
+            onSetSelectedIds(new Set())
+          }}
+          onCancel={() => onSetBulkTrashConfirm(null)}
         />
       )}
 

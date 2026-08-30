@@ -372,6 +372,29 @@ export default function App() {
     })
   }, [setState])
 
+  /**
+   * Sweep the ticked-off to-dos out of one cluster. Returning `prev` untouched
+   * when nothing is done means an empty sweep pushes no undo snapshot — the
+   * menu item is disabled in that case anyway, but a no-op should stay a no-op.
+   */
+  const clearCompletedInCluster = useCallback((clusterId: string) => {
+    setState(prev => {
+      const doneIds = new Set(
+        prev.globs.filter(g => g.clusterId === clusterId && g.isTodo && g.done).map(g => g.id)
+      )
+      if (doneIds.size === 0) return prev
+      return {
+        ...prev,
+        globs: prev.globs.filter(g => !doneIds.has(g.id)),
+        clusters: prev.clusters.map(c =>
+          c.id === clusterId
+            ? { ...c, globIds: c.globIds.filter(id => !doneIds.has(id)), lastInteraction: Date.now() }
+            : c
+        ),
+      }
+    })
+  }, [setState])
+
   const toggleDone = useCallback((id: string) => {
     setState(prev => ({
       ...prev,
@@ -963,6 +986,7 @@ export default function App() {
         onToggleFlag={toggleFlag}
         onToggleTodo={toggleTodo}
         onToggleAllTodosInCluster={toggleAllTodosInCluster}
+        onClearCompletedInCluster={clearCompletedInCluster}
         onToggleDone={toggleDone}
         onDuplicate={duplicateGlob}
         onUpdatePos={updateGlobPos}

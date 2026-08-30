@@ -119,19 +119,8 @@ body {
   position: fixed;
   top: 14px;
   left: 214px;
-  /* Above the marquee overlay (z 250) so toolbar buttons remain clickable in marquee mode. */
   z-index: 260;
   display: flex;
-  gap: 8px;
-}
-.mode-tools {
-  position: fixed;
-  top: 50%;
-  left: 14px;
-  transform: translateY(-50%);
-  z-index: 260;
-  display: flex;
-  flex-direction: column;
   gap: 8px;
 }
 .cluster-tool-btn {
@@ -172,19 +161,11 @@ body {
   overflow: visible;
 }
 
-/* ── marquee selection tool ──────────────────────────── */
-.marquee-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 250;
-  cursor: crosshair;
-  /* Transparent — we just want pointer capture, not a visual scrim. */
-  background: transparent;
-  /* But touch-action none so trackpad two-finger doesn't pan instead of drag. */
-  touch-action: none;
-}
+/* ── rubber-band selection (no mode: drag from empty space) ───── */
 .marquee-rect {
-  position: absolute;
+  position: fixed;
+  /* Above clusters, below the toolbars and modals. */
+  z-index: 240;
   border: 1.5px dashed color-mix(in srgb, var(--accent-bright) 95%, transparent);
   background: color-mix(in srgb, var(--accent-bright) 8%, transparent);
   pointer-events: none;
@@ -420,6 +401,29 @@ body {
   overflow: hidden;
   background: var(--bg);
 }
+/* Drag-from-empty-space is a selection gesture, so say so while it's happening. */
+.galaxy.banding { cursor: crosshair; }
+.galaxy.banding * { user-select: none; }
+.galaxy.group-dragging { cursor: grabbing; }
+
+/* ── the breathing clock ──────────────────────────────────
+ * Selected things pulse off ONE animated custom property rather than each
+ * running an animation of its own. A CSS animation starts its clock the moment
+ * the class lands, so five items picked up at five different moments used to
+ * breathe five different ways — and adding a sixth to the group made it worse.
+ * `--breath` is animated once, here on the galaxy, and inherited by everything
+ * inside: whatever joins the selection is already in time with its sisters.
+ * Slow and shallow on purpose — this is breathing, not flashing. */
+@property --breath {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+.galaxy.breathing { animation: breathClock 4.4s ease-in-out infinite; }
+@keyframes breathClock {
+  0%, 100% { --breath: 0; }
+  50%      { --breath: 1; }
+}
 
 /* Nebula background layers */
 .galaxy::before {
@@ -637,11 +641,15 @@ body {
 .cluster-edge-hit.right {
   top: 10px;
   bottom: 10px;
-  width: 12px;
+  /* Biased outward: 8px of reach outside the card, only 2px inside it. You aim
+     at a border from the outside anyway, and the inside of that strip is the
+     handle gutter of whatever row you are level with (see isHandleZone) — a
+     double-click there should convert the row, not grab the cluster. */
+  width: 10px;
   cursor: grab;
 }
-.cluster-edge-hit.left { left: -6px; }
-.cluster-edge-hit.right { right: -6px; }
+.cluster-edge-hit.left { left: -8px; }
+.cluster-edge-hit.right { right: -8px; }
 
 
 .cluster-drag-handle,
@@ -896,28 +904,18 @@ body {
   border-top: 2px solid var(--accent);
 }
 .cluster-glob-item.selected {
-  /* Maximalist mode: tint + full cluster-color border + thick left-edge accent + pulsing glow. */
-  background: color-mix(in srgb, var(--cluster-color) 14%, rgba(255,255,255,0.04));
+  /* Maximalist mode: tint + full cluster-color border + thick left-edge accent +
+     a glow that breathes on the shared --breath clock (see .galaxy.breathing). */
+  background: color-mix(in srgb, var(--cluster-color) calc(11% + var(--breath) * 7%), rgba(255,255,255,0.04));
   border: 1.5px solid var(--cluster-color);
   border-left-width: 5px;
   border-left-color: var(--cluster-color);
-  animation: selectedPulse 1.6s ease-in-out infinite;
   position: relative;
-}
-@keyframes selectedPulse {
-  0%, 100% {
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--cluster-color) 50%, transparent),
-      0 0 10px color-mix(in srgb, var(--cluster-color) 35%, transparent),
-      inset 4px 0 12px -2px color-mix(in srgb, var(--cluster-color) 40%, transparent);
-  }
-  50% {
-    box-shadow:
-      0 0 0 2px var(--cluster-color),
-      0 0 22px color-mix(in srgb, var(--cluster-color) 65%, transparent),
-      0 0 40px color-mix(in srgb, var(--cluster-color) 35%, transparent),
-      inset 4px 0 18px -2px color-mix(in srgb, var(--cluster-color) 60%, transparent);
-  }
+  box-shadow:
+    0 0 0 calc(1px + var(--breath) * 1px) color-mix(in srgb, var(--cluster-color) calc(48% + var(--breath) * 42%), transparent),
+    0 0 calc(10px + var(--breath) * 13px) color-mix(in srgb, var(--cluster-color) calc(32% + var(--breath) * 26%), transparent),
+    0 0 calc(18px + var(--breath) * 22px) color-mix(in srgb, var(--cluster-color) calc(10% + var(--breath) * 18%), transparent),
+    inset 4px 0 calc(12px + var(--breath) * 7px) -2px color-mix(in srgb, var(--cluster-color) calc(40% + var(--breath) * 18%), transparent);
 }
 
 .cluster-glob-grip {
@@ -2228,11 +2226,9 @@ body {
  * Grab any selected item and the whole selection travels together. The globs
  * themselves don't move — a ghost follows the cursor and the drop is what
  * mutates anything. See useGroupDrag.ts. */
-.marquee-overlay.group-dragging { cursor: grabbing; }
-
 .group-ghost {
   position: fixed;
-  z-index: 260; /* above .marquee-overlay (250), below modals (500) */
+  z-index: 260; /* above the rubber band (240), below modals (500) */
   /* Offset from the cursor so it never covers the thing you're aiming at. */
   transform: translate(14px, 14px);
   pointer-events: none;
@@ -2292,6 +2288,15 @@ body {
     0 10px 30px rgba(0, 0, 0, 0.5);
 }
 .group-ghost.over-cluster .group-ghost-count { color: var(--success); }
+.group-ghost.over-trash {
+  border-color: color-mix(in srgb, var(--danger) 65%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent), 0 0 26px color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.group-ghost.over-trash .group-ghost-count { color: var(--danger); }
+.group-ghost.over-trash .group-ghost-stack i {
+  border-color: color-mix(in srgb, var(--danger) 70%, transparent);
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+}
 .group-ghost.over-cluster .group-ghost-stack i {
   border-color: color-mix(in srgb, var(--success) 80%, transparent);
   background: color-mix(in srgb, var(--success) 35%, rgba(20, 20, 40, 0.9));
@@ -2325,21 +2330,16 @@ body {
     0 10px 34px rgba(0, 0, 0, 0.4); }
 }
 
-/* A free-floating glob picked up by the marquee. Same maximalist language as a
-   selected cluster item — ring + glow + pulse — but drawn around the blob. */
+/* A free-floating glob picked up by the band. Same maximalist language as a
+   selected cluster item — ring + glow — breathing on the same shared clock. */
 .glob.selected {
-  animation: freeGlobSelectedPulse 1.6s ease-in-out infinite;
   z-index: 15;
-}
-@keyframes freeGlobSelectedPulse {
-  0%, 100% {
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--accent-bright) 85%, transparent),
-      0 0 18px 2px color-mix(in srgb, var(--accent-bright) 45%, transparent);
-  }
-  50% {
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--accent-glow) 95%, transparent),
-      0 0 28px 6px color-mix(in srgb, var(--accent-bright) 65%, transparent);
-  }
+  /* .glob transitions box-shadow; leaving that on would smear the rhythm and
+     put this glob out of step with the cluster items breathing beside it. */
+  transition: opacity 0.2s, filter 0.25s, border-color 0.25s;
+  box-shadow:
+    inset 0 0 22px color-mix(in srgb, var(--glob-color) 18%, transparent),
+    0 0 0 calc(1.5px + var(--breath) * 1.5px) color-mix(in srgb, var(--accent-bright) calc(55% + var(--breath) * 38%), transparent),
+    0 0 calc(16px + var(--breath) * 14px) 2px color-mix(in srgb, var(--accent-bright) calc(32% + var(--breath) * 26%), transparent),
+    0 8px 28px rgba(0,0,0,0.3);
 }

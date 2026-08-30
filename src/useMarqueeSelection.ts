@@ -1,61 +1,69 @@
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
 import type { MarqueeRect } from './GalaxyChrome'
 
-type MarqueeMode = 'replace' | 'add' | 'remove'
+/** How a freshly swept band combines with whatever is already selected. */
+type CombineMode = 'replace' | 'add' | 'remove'
 
+/** Under this much travel the press was really a click, not a band. */
+const MIN_BAND = 3
+
+/*
+ * Rubber-band selection. There is no longer a *mode* to be in: the galaxy hands
+ * every press on its own background here, so drag-from-empty-space selects and
+ * drag-from-anything-else keeps doing what it always did. The old V/M tool
+ * column existed only because a full-screen overlay had to swallow pointer
+ * events to make the band work, and an overlay you have to opt into is a mode.
+ */
 export function useMarqueeSelection() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [marqueeMode, setMarqueeMode] = useState(false)
   const [marqueeRect, setMarqueeRect] = useState<MarqueeRect | null>(null)
-  const marqueeModeRef = useRef<MarqueeMode>('replace')
+  // Mirrored into a ref so move/commit can read the live band without waiting
+  // for a render to land.
+  const rectRef = useRef<MarqueeRect | null>(null)
+  const combineRef = useRef<CombineMode>('replace')
 
-  const clearSelection = () => setSelectedIds(new Set())
-
-  const setPointerMode = () => {
-    setMarqueeMode(false)
-    setMarqueeRect(null)
+  const setRect = (next: MarqueeRect | null) => {
+    rectRef.current = next
+    setMarqueeRect(next)
   }
 
-  const setSelectionMode = () => {
-    setMarqueeMode(true)
-    setMarqueeRect(null)
-  }
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), [])
 
-  const startSelection = (event: PointerEvent<HTMLDivElement>) => {
-    marqueeModeRef.current = (event.ctrlKey || event.metaKey) ? 'remove' : event.shiftKey ? 'add' : 'replace'
-    const startX = event.clientX
-    const startY = event.clientY
-    setMarqueeRect({ x1: startX, y1: startY, x2: startX, y2: startY })
+  const startSelection = (event: PointerEvent<HTMLElement>) => {
+    combineRef.current = (event.ctrlKey || event.metaKey) ? 'remove' : event.shiftKey ? 'add' : 'replace'
+    setRect({ x1: event.clientX, y1: event.clientY, x2: event.clientX, y2: event.clientY })
   }
 
   const updateSelection = (x: number, y: number) => {
-    setMarqueeRect(rect => rect ? { ...rect, x2: x, y2: y } : null)
+    const rect = rectRef.current
+    if (!rect) return
+    setRect({ ...rect, x2: x, y2: y })
   }
 
-  const commitSelection = () => {
-    if (!marqueeRect) return
-    if (Math.abs(marqueeRect.x2 - marqueeRect.x1) < 3 && Math.abs(marqueeRect.y2 - marqueeRect.y1) < 3) {
-      setMarqueeRect(null)
-      return
-    }
+  /** Returns true when a real band was swept, so the caller can tell it apart from a click. */
+  const commitSelection = (): boolean => {
+    const rect = rectRef.current
+    if (!rect) return false
+    setRect(null)
+    if (Math.abs(rect.x2 - rect.x1) < MIN_BAND && Math.abs(rect.y2 - rect.y1) < MIN_BAND) return false
 
-    const left = Math.min(marqueeRect.x1, marqueeRect.x2)
-    const right = Math.max(marqueeRect.x1, marqueeRect.x2)
-    const top = Math.min(marqueeRect.y1, marqueeRect.y2)
-    const bottom = Math.max(marqueeRect.y1, marqueeRect.y2)
+    const left = Math.min(rect.x1, rect.x2)
+    const right = Math.max(rect.x1, rect.x2)
+    const top = Math.min(rect.y1, rect.y2)
+    const bottom = Math.max(rect.y1, rect.y2)
     const inRect = new Set<string>()
 
     document.querySelectorAll<HTMLElement>('[data-glob-id]').forEach(el => {
       const id = el.dataset.globId
       if (!id) return
-      const rect = el.getBoundingClientRect()
-      if (rect.right >= left && rect.left <= right && rect.bottom >= top && rect.top <= bottom) {
+      const box = el.getBoundingClientRect()
+      if (box.right >= left && box.left <= right && box.bottom >= top && box.top <= bottom) {
         inRect.add(id)
       }
     })
 
-    const mode = marqueeModeRef.current
+    const mode = combineRef.current
     setSelectedIds(prev => {
       if (mode === 'add') return new Set([...prev, ...inRect])
       if (mode === 'remove') {
@@ -65,21 +73,21 @@ export function useMarqueeSelection() {
       }
       return inRect
     })
-    setMarqueeRect(null)
+    return true
   }
+
+  const cancelSelection = () => setRect(null)
 
   return {
     selectedIds,
     setSelectedIds,
     clearSelection,
-    marqueeMode,
-    setMarqueeMode,
     marqueeRect,
-    setMarqueeRect,
-    setPointerMode,
-    setSelectionMode,
+    /** True while a band is actively being swept. */
+    banding: marqueeRect !== null,
     startSelection,
     updateSelection,
     commitSelection,
+    cancelSelection,
   }
 }
