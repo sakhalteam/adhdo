@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
-import type { Glob, Cluster, GalaxyState } from './types'
+import type { Glob, Cluster, GalaxyState, Priority } from './types'
 import {
   ClusterBrowser,
   ClusterCard,
@@ -35,6 +35,8 @@ interface Props {
   onUpdateText: (id: string, text: string) => void
   onToggleFlag: (id: string) => void
   onToggleTodo: (id: string) => void
+  onSetDueDate: (id: string, dueDate: string | null) => void
+  onSetPriority: (id: string, priority: Priority) => void
   onToggleAllTodosInCluster: (clusterId: string) => void
   onClearCompletedInCluster: (clusterId: string) => void
   onToggleDone: (id: string) => void
@@ -74,7 +76,7 @@ export default function Galaxy({
   showOnboarding,
   onDismissOnboarding,
   state, updateGlobs, updateState,
-  onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onToggleAllTodosInCluster,
+  onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onSetDueDate, onSetPriority, onToggleAllTodosInCluster,
   onClearCompletedInCluster, onToggleDone,
   onDuplicate, onUpdatePos,
   onCreateCluster, onConvertToCluster, onAddToCluster, onMoveGlobToCluster, onAddGlobToCluster, onRemoveFromCluster,
@@ -99,6 +101,8 @@ export default function Galaxy({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; globId: string; inCluster: boolean } | null>(null)
   const [clusterCtx, setClusterCtx] = useState<{ x: number; y: number; clusterId: string } | null>(null)
   const [recolorPopover, setRecolorPopover] = useState<{ x: number; y: number; target: RecolorTarget } | null>(null)
+  const [schedulePopover, setSchedulePopover] = useState<{ x: number; y: number; globId: string } | null>(null)
+  const [priorityPopover, setPriorityPopover] = useState<{ x: number; y: number; globId: string } | null>(null)
   const {
     selectedIds,
     setSelectedIds,
@@ -176,6 +180,8 @@ export default function Galaxy({
     setHelpOpen(false)
     setClusterBrowserOpen(false)
     setRecolorPopover(null)
+    setSchedulePopover(null)
+    setPriorityPopover(null)
     setBulkCtx(null)
   }, [])
 
@@ -651,6 +657,8 @@ export default function Galaxy({
         bulkCtx={bulkCtx}
         selectedIds={selectedIds}
         recolorPopover={recolorPopover}
+        schedulePopover={schedulePopover}
+        priorityPopover={priorityPopover}
         newGlobPos={newGlobPos}
         draggingFreeGlob={draggingFreeGlob}
         draggingClusterId={draggingClusterId}
@@ -672,6 +680,8 @@ export default function Galaxy({
         onSetClusterCtx={setClusterCtx}
         onSetBulkCtx={setBulkCtx}
         onSetRecolorPopover={setRecolorPopover}
+        onSetSchedulePopover={setSchedulePopover}
+        onSetPriorityPopover={setPriorityPopover}
         onSetNewGlobPos={setNewGlobPos}
         onSetTrashConfirm={setTrashConfirm}
         onSetBulkTrashConfirm={setBulkTrashConfirm}
@@ -689,6 +699,8 @@ export default function Galaxy({
         onSetSelectedIds={setSelectedIds}
         onToggleFlag={onToggleFlag}
         onToggleTodo={onToggleTodo}
+        onSetDueDate={onSetDueDate}
+        onSetPriority={onSetPriority}
         onToggleAllTodosInCluster={onToggleAllTodosInCluster}
         onToggleAllTodosInGlobs={onToggleAllTodosInGlobs}
         onClearCompletedInCluster={onClearCompletedInCluster}

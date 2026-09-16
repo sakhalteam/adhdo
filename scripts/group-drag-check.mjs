@@ -37,7 +37,11 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? '  PASS' : '  FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`)
 }
 
-const browser = await chromium.launch({ channel: 'msedge' })
+// Defaults to installed Edge (Nic's machine); BROWSER_PATH points at any
+// Chromium binary instead (e.g. a CI container's bundled build).
+const browser = await chromium.launch(
+  process.env.BROWSER_PATH ? { executablePath: process.env.BROWSER_PATH } : { channel: 'msedge' },
+)
 
 async function open() {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2 })

@@ -1,8 +1,9 @@
 import { useRef } from 'react'
 import type { DragEvent, KeyboardEvent, MouseEvent, PointerEvent, RefObject } from 'react'
-import type { Cluster, Connection, Glob } from './types'
+import type { Cluster, Connection, Glob, Priority } from './types'
 import type { SearchResult } from './useGalaxySearch'
 import { PALETTE } from './store'
+import { addDaysStr, formatDue, nextWeekdayStr, todayStr } from './dates'
 
 export type RecolorTarget =
   | { kind: 'glob'; id: string }
@@ -31,6 +32,26 @@ function GripIcon({ size = 14 }: { size?: number }) {
       <circle cx="9" cy="18" r="1.7" />
       <circle cx="15" cy="18" r="1.7" />
     </svg>
+  )
+}
+
+/**
+ * The due date as it appears on a row or under a glob — one shared chip so the
+ * phone's task list and the galaxy speak the same language (mobile renders the
+ * identical classes from formatDue's tone).
+ */
+export function DueChip({ dueDate }: { dueDate: string }) {
+  const due = formatDue(dueDate)
+  return (
+    <span className={`due-chip ${due.tone}`}>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="16" rx="3" />
+        <line x1="3" y1="9.5" x2="21" y2="9.5" />
+        <line x1="8" y1="2.5" x2="8" y2="6.5" />
+        <line x1="16" y1="2.5" x2="16" y2="6.5" />
+      </svg>
+      {due.label}
+    </span>
   )
 }
 
@@ -257,7 +278,10 @@ export function FreeGlob({
           }}
         />
       ) : (
-        <span className="glob-text">{glob.text}</span>
+        <span className="glob-text">
+          {glob.text}
+          {glob.dueDate && <DueChip dueDate={glob.dueDate} />}
+        </span>
       )}
     </div>
   )
@@ -865,7 +889,7 @@ export function ClusterItemRow({
     >
       {glob.isTodo && (
         <button
-          className={`todo-check ${glob.done ? 'checked' : ''}`}
+          className={`todo-check p${glob.priority ?? 4} ${glob.done ? 'checked' : ''}`}
           onClick={e => { e.stopPropagation(); onToggleDone() }}
         >
           {glob.done ? '✓' : ''}
@@ -892,6 +916,7 @@ export function ClusterItemRow({
           <span className="cluster-glob-text-inner">
             {glob.flagged && <span className="flag-dot-inline" />}
             {glob.text}
+            {glob.dueDate && <DueChip dueDate={glob.dueDate} />}
           </span>
         </span>
       )}
@@ -1206,6 +1231,84 @@ export function BulkContextMenu({
   )
 }
 
+/**
+ * Due-date picker, opened from the glob context menu. Same quick options the
+ * phone's schedule sheet offers, so the two layouts teach the same habits.
+ */
+export function SchedulePopover({
+  x,
+  y,
+  glob,
+  menuRef,
+  onPick,
+}: {
+  x: number
+  y: number
+  glob: Glob
+  menuRef: (element: HTMLDivElement | null) => void
+  onPick: (dueDate: string | null) => void
+}) {
+  return (
+    <div
+      ref={menuRef}
+      className="ctx-menu schedule-popover"
+      style={{ left: x, top: y }}
+      onClick={e => e.stopPropagation()}
+    >
+      <button onClick={() => onPick(todayStr())}>📅 Today</button>
+      <button onClick={() => onPick(addDaysStr(todayStr(), 1))}>🌅 Tomorrow</button>
+      <button onClick={() => onPick(nextWeekdayStr(6))}>🛋️ This weekend</button>
+      <button onClick={() => onPick(nextWeekdayStr(1))}>⏭️ Next week</button>
+      <label className="schedule-pick-row">
+        🗓️ Pick a date…
+        <input
+          type="date"
+          defaultValue={glob.dueDate ?? ''}
+          onChange={e => { if (e.target.value) onPick(e.target.value) }}
+        />
+      </label>
+      {glob.dueDate && (
+        <>
+          <hr />
+          <button className="ctx-danger" onClick={() => onPick(null)}>✕ No date</button>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** P1–P4, Todoist colors. Setting any of P1–P3 also makes the glob a to-do. */
+export function PriorityPopover({
+  x,
+  y,
+  glob,
+  menuRef,
+  onPick,
+}: {
+  x: number
+  y: number
+  glob: Glob
+  menuRef: (element: HTMLDivElement | null) => void
+  onPick: (priority: Priority) => void
+}) {
+  const current = glob.priority ?? 4
+  return (
+    <div
+      ref={menuRef}
+      className="ctx-menu priority-popover"
+      style={{ left: x, top: y }}
+      onClick={e => e.stopPropagation()}
+    >
+      {([1, 2, 3, 4] as Priority[]).map(p => (
+        <button key={p} className={current === p ? 'active' : ''} onClick={() => onPick(p)}>
+          <span className={`prio-flag p${p}`} aria-hidden="true">⚑</span>
+          {p === 4 ? 'No priority' : `Priority ${p}`}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function GlobContextMenu({
   x,
   y,
@@ -1215,6 +1318,8 @@ export function GlobContextMenu({
   onEdit,
   onToggleFlag,
   onToggleTodo,
+  onSchedule,
+  onPriority,
   onDuplicate,
   onRecolor,
   onConvertToCluster,
@@ -1229,6 +1334,8 @@ export function GlobContextMenu({
   onEdit: () => void
   onToggleFlag: () => void
   onToggleTodo: () => void
+  onSchedule: () => void
+  onPriority: () => void
   onDuplicate: () => void
   onRecolor: () => void
   onConvertToCluster: () => void
@@ -1248,6 +1355,8 @@ export function GlobContextMenu({
         {isTodo ? '☑️ Remove todo' : '☐ Make todo'}
         <span className="ctx-shortcut">⌃/⌘+Click</span>
       </button>
+      <button onClick={onSchedule}>📅 Due date…</button>
+      <button onClick={onPriority}>⚑ Priority…</button>
       <button onClick={onDuplicate}>📋 Duplicate</button>
       <button onClick={onRecolor}>🎨 Recolor</button>
       {!inCluster && <button onClick={onConvertToCluster}>📦 Convert to cluster</button>}
@@ -1545,6 +1654,8 @@ export function GalaxyOverlays({
   bulkCtx,
   selectedIds,
   recolorPopover,
+  schedulePopover,
+  priorityPopover,
   newGlobPos,
   draggingFreeGlob,
   draggingClusterId,
@@ -1566,6 +1677,8 @@ export function GalaxyOverlays({
   onSetClusterCtx,
   onSetBulkCtx,
   onSetRecolorPopover,
+  onSetSchedulePopover,
+  onSetPriorityPopover,
   onSetNewGlobPos,
   onSetTrashConfirm,
   onSetBulkTrashConfirm,
@@ -1583,6 +1696,8 @@ export function GalaxyOverlays({
   onSetSelectedIds,
   onToggleFlag,
   onToggleTodo,
+  onSetDueDate,
+  onSetPriority,
   onToggleAllTodosInCluster,
   onToggleAllTodosInGlobs,
   onClearCompletedInCluster,
@@ -1616,6 +1731,8 @@ export function GalaxyOverlays({
   bulkCtx: { x: number; y: number } | null
   selectedIds: Set<string>
   recolorPopover: { x: number; y: number; target: RecolorTarget } | null
+  schedulePopover: { x: number; y: number; globId: string } | null
+  priorityPopover: { x: number; y: number; globId: string } | null
   newGlobPos: { x: number; y: number } | null
   draggingFreeGlob: boolean
   draggingClusterId: string | null
@@ -1637,6 +1754,8 @@ export function GalaxyOverlays({
   onSetClusterCtx: (value: { x: number; y: number; clusterId: string } | null) => void
   onSetBulkCtx: (value: { x: number; y: number } | null) => void
   onSetRecolorPopover: (value: { x: number; y: number; target: RecolorTarget } | null) => void
+  onSetSchedulePopover: (value: { x: number; y: number; globId: string } | null) => void
+  onSetPriorityPopover: (value: { x: number; y: number; globId: string } | null) => void
   onSetNewGlobPos: (value: { x: number; y: number } | null) => void
   onSetTrashConfirm: (value: string | null) => void
   onSetBulkTrashConfirm: (value: string[] | null) => void
@@ -1654,6 +1773,8 @@ export function GalaxyOverlays({
   onSetSelectedIds: (value: Set<string>) => void
   onToggleFlag: (id: string) => void
   onToggleTodo: (id: string) => void
+  onSetDueDate: (id: string, dueDate: string | null) => void
+  onSetPriority: (id: string, priority: Priority) => void
   onToggleAllTodosInCluster: (clusterId: string) => void
   onToggleAllTodosInGlobs: (ids: string[]) => void
   onClearCompletedInCluster: (clusterId: string) => void
@@ -1766,6 +1887,40 @@ export function GalaxyOverlays({
         />
       )}
 
+      {schedulePopover && (() => {
+        const glob = globs.find(g => g.id === schedulePopover.globId)
+        if (!glob) return null
+        return (
+          <SchedulePopover
+            x={schedulePopover.x}
+            y={schedulePopover.y}
+            glob={glob}
+            menuRef={clampMenuToViewport}
+            onPick={dueDate => {
+              onSetDueDate(glob.id, dueDate)
+              onSetSchedulePopover(null)
+            }}
+          />
+        )
+      })()}
+
+      {priorityPopover && (() => {
+        const glob = globs.find(g => g.id === priorityPopover.globId)
+        if (!glob) return null
+        return (
+          <PriorityPopover
+            x={priorityPopover.x}
+            y={priorityPopover.y}
+            glob={glob}
+            menuRef={clampMenuToViewport}
+            onPick={priority => {
+              onSetPriority(glob.id, priority)
+              onSetPriorityPopover(null)
+            }}
+          />
+        )
+      })()}
+
       {contextMenu && (() => {
         const glob = globs.find(g => g.id === contextMenu.globId)
         return (
@@ -1778,6 +1933,14 @@ export function GalaxyOverlays({
             onEdit={() => { onSetEditingId(contextMenu.globId); onSetContextMenu(null) }}
             onToggleFlag={() => { onToggleFlag(contextMenu.globId); onSetContextMenu(null) }}
             onToggleTodo={() => { onToggleTodo(contextMenu.globId); onSetContextMenu(null) }}
+            onSchedule={() => {
+              onSetSchedulePopover({ x: contextMenu.x, y: contextMenu.y, globId: contextMenu.globId })
+              onSetContextMenu(null)
+            }}
+            onPriority={() => {
+              onSetPriorityPopover({ x: contextMenu.x, y: contextMenu.y, globId: contextMenu.globId })
+              onSetContextMenu(null)
+            }}
             onDuplicate={() => { onDuplicate(contextMenu.globId); onSetContextMenu(null) }}
             onRecolor={() => {
               onSetRecolorPopover({ x: contextMenu.x, y: contextMenu.y, target: { kind: 'glob', id: contextMenu.globId } })

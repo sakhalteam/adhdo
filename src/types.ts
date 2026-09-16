@@ -1,3 +1,6 @@
+/** Todoist-style priority: 1 is highest (red), 4 is "no priority" (the default). */
+export type Priority = 1 | 2 | 3 | 4
+
 export interface Glob {
   id: string
   text: string
@@ -14,6 +17,10 @@ export interface Glob {
   createdAt: number
   /** Random seed for blob shape morphing */
   blobSeed: number
+  /** Local calendar date 'YYYY-MM-DD', or null/absent for undated. */
+  dueDate?: string | null
+  /** Absent on pre-2026-09 records — treat as 4. */
+  priority?: Priority
 }
 
 export interface Cluster {

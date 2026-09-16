@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, touchLocal, isNewer, isDirty, setDirty, isEmptyState, mergeStates, hasSeenOnboarding, markOnboardingSeen, stateSignature, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
 import type { RemoteState } from './store'
 import { supabase } from './supabaseClient'
-import type { GalaxyState, Glob, Cluster } from './types'
+import type { GalaxyState, Glob, Cluster, Priority } from './types'
 import type { User } from '@supabase/supabase-js'
 import Galaxy from './Galaxy'
 import MobileApp from './MobileApp'
@@ -318,14 +318,90 @@ export default function App() {
     }))
   }, [finishOnboarding, onboardingActive, setState])
 
+  /**
+   * Todoist-style capture: one call that can land a thought in a project with a
+   * due date and priority already attached. Anything scheduled or prioritized
+   * is a to-do by definition; a bare text stays a plain thought.
+   */
+  const addTask = useCallback((text: string, opts: {
+    clusterId?: string | null
+    dueDate?: string | null
+    priority?: Priority
+  } = {}) => {
+    if (!text.trim()) return
+    if (onboardingActive) finishOnboarding()
+    setState(prev => {
+      const cluster = opts.clusterId ? prev.clusters.find(c => c.id === opts.clusterId) : undefined
+      const base = makeGlob(
+        text.trim(),
+        cluster ? cluster.x : window.innerWidth / 2,
+        cluster ? cluster.y : window.innerHeight / 2,
+      )
+      const g: Glob = {
+        ...base,
+        clusterId: cluster ? cluster.id : null,
+        dueDate: opts.dueDate ?? null,
+        priority: opts.priority ?? 4,
+        isTodo: !!opts.dueDate || (opts.priority !== undefined && opts.priority < 4),
+      }
+      return {
+        ...prev,
+        globs: [...prev.globs, g],
+        clusters: cluster
+          ? prev.clusters.map(c =>
+              c.id === cluster.id
+                ? { ...c, globIds: [...c.globIds, g.id], lastInteraction: Date.now() }
+                : c
+            )
+          : prev.clusters,
+      }
+    })
+  }, [finishOnboarding, onboardingActive, setState])
+
+  /** Scheduling something makes it a to-do; clearing the date leaves that alone. */
+  const setGlobDueDate = useCallback((id: string, dueDate: string | null) => {
+    setState(prev => ({
+      ...prev,
+      globs: prev.globs.map(g =>
+        g.id === id ? { ...g, dueDate, isTodo: g.isTodo || !!dueDate } : g
+      ),
+    }))
+  }, [setState])
+
+  const setGlobPriority = useCallback((id: string, priority: Priority) => {
+    setState(prev => ({
+      ...prev,
+      globs: prev.globs.map(g =>
+        g.id === id ? { ...g, priority, isTodo: g.isTodo || priority < 4 } : g
+      ),
+    }))
+  }, [setState])
+
+  /** An empty project, born from the mobile Browse tab's "Add project". */
+  const addCluster = useCallback((name: string) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const w = window.innerWidth, h = window.innerHeight
+    const cluster = makeCluster(
+      trimmed,
+      w * (0.25 + Math.random() * 0.5),
+      h * (0.25 + Math.random() * 0.5),
+      [],
+    )
+    setState(prev => ({ ...prev, clusters: [...prev.clusters, cluster] }))
+  }, [setState])
+
   const deleteGlob = useCallback((id: string) => {
+    // Emptied clusters survive. They used to be swept away here, but on mobile a
+    // cluster is a first-class project — completing and clearing its last task
+    // must not delete the project. Desktop keeps its explicit delete/dissolve paths.
     setState(prev => ({
       ...prev,
       globs: prev.globs.filter(g => g.id !== id),
       clusters: prev.clusters.map(c => ({
         ...c,
         globIds: c.globIds.filter(gid => gid !== id),
-      })).filter(c => c.globIds.length > 0),
+      })),
     }))
   }, [setState])
 
@@ -942,6 +1018,11 @@ export default function App() {
           onboardingActive={onboardingActive}
           voice={voice}
           onAdd={addGlob}
+          onAddTask={addTask}
+          onSetDueDate={setGlobDueDate}
+          onSetPriority={setGlobPriority}
+          onAddCluster={addCluster}
+          onRecolorCluster={recolorCluster}
           onToggleDone={toggleDone}
           onToggleTodo={toggleTodo}
           onToggleFlag={toggleFlag}
@@ -949,12 +1030,10 @@ export default function App() {
           onDelete={deleteGlob}
           onAddToCluster={addToCluster}
           onMoveGlobToCluster={moveGlobToCluster}
-          onConvertToCluster={convertToCluster}
-          onTransferToNewCluster={transferToNewCluster}
           onRemoveFromCluster={removeFromCluster}
-          onToggleClusterCollapse={toggleClusterCollapse}
           onRenameCluster={renameCluster}
           onToggleAllTodosInCluster={toggleAllTodosInCluster}
+          onClearCompletedInCluster={clearCompletedInCluster}
           onDissolveCluster={dissolveCluster}
           onDeleteCluster={deleteCluster}
           onMoveGlobsToCluster={moveGlobsToCluster}
@@ -985,6 +1064,8 @@ export default function App() {
         onUpdateText={updateGlobText}
         onToggleFlag={toggleFlag}
         onToggleTodo={toggleTodo}
+        onSetDueDate={setGlobDueDate}
+        onSetPriority={setGlobPriority}
         onToggleAllTodosInCluster={toggleAllTodosInCluster}
         onClearCompletedInCluster={clearCompletedInCluster}
         onToggleDone={toggleDone}

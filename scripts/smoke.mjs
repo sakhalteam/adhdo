@@ -1,6 +1,9 @@
 /**
  * Functional smoke test against the running dev server: node scripts/smoke.mjs
  * Needs a driver first: npm i --no-save playwright-core
+ *
+ * Mobile is the Todoist-shaped app (tabs, quick add, swipe gestures); desktop
+ * is the galaxy plus the due-date/priority reflection.
  */
 import { chromium } from 'playwright-core'
 
@@ -8,24 +11,30 @@ import { chromium } from 'playwright-core'
 const URL = `http://localhost:${process.env.PORT ?? 5173}/adhdo/`
 const now = Date.now()
 
+// Local calendar dates, same arithmetic as src/dates.ts.
+const dstr = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const TODAY = dstr(new Date())
+const YESTERDAY = dstr(new Date(now - 86_400_000))
+const TOMORROW = dstr(new Date(now + 86_400_000))
+
 let n = 0
 const glob = (text, opts = {}) => ({
   id: `g${++n}`, text, x: 400, y: 300, color: '#a78bfa',
   flagged: false, isTodo: false, done: false, clusterId: null,
-  createdAt: now - n * 60_000, ...opts,
+  createdAt: now - n * 60_000, dueDate: null, priority: 4, ...opts,
 })
 
 const state = {
   globs: [
     glob('call the arborist about the maple'),
     glob('pressure-wash pricing tiers'),
-    glob('jojo dinosaur birthday'),
-    glob('renew the trailer tabs'),
-    glob('podcast about attention', { flagged: true }),
-    glob('gutter guards', { isTodo: true, clusterId: 'c1' }),
+    glob('jojo dinosaur birthday', { flagged: true }),
+    glob('renew the trailer tabs', { isTodo: true, dueDate: YESTERDAY, priority: 1 }),
+    glob('water the ficus', { isTodo: true, dueDate: TODAY }),
+    glob('gutter guards', { isTodo: true, clusterId: 'c1', dueDate: TODAY, priority: 2 }),
     glob('order degreaser', { isTodo: true, clusterId: 'c1' }),
     // Deliberately corrupt: claims c1, but c1 does not list it. Before
-    // repairState this rendered in neither the unsorted list nor the cluster.
+    // repairState this rendered nowhere at all.
     glob('ORPHANED THOUGHT', { clusterId: 'c1' }),
   ],
   clusters: [
@@ -41,7 +50,11 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? '  PASS' : '  FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`)
 }
 
-const browser = await chromium.launch({ channel: 'msedge' })
+// Defaults to installed Edge (Nic's machine); BROWSER_PATH points at any
+// Chromium binary instead (e.g. a CI container's bundled build).
+const browser = await chromium.launch(
+  process.env.BROWSER_PATH ? { executablePath: process.env.BROWSER_PATH } : { channel: 'msedge' },
+)
 
 async function session(viewport, isMobile) {
   const ctx = await browser.newContext({
@@ -70,92 +83,145 @@ const readState = async page => {
   return page.evaluate(() => JSON.parse(localStorage.getItem('adhdo-galaxy')))
 }
 
+/** Close whatever bottom sheet is open by tapping the dimmed backdrop. */
+const closeSheet = async page => {
+  await page.locator('.mobile-sheet-backdrop').click({ position: { x: 20, y: 80 } })
+  await page.waitForTimeout(250)
+}
+
 // ── mobile ────────────────────────────────────────────────────────────────
 {
   const { ctx, page, errors } = await session({ width: 390, height: 844 }, true)
 
-  // 1. State repair — the orphan must be visible somewhere.
-  const orphanVisible = await page.locator('.mobile-item-text', { hasText: 'ORPHANED THOUGHT' }).isVisible()
-  check('Orphaned glob is rendered, not lost', orphanVisible)
+  // 1. Today tab: overdue + today sections from due dates.
+  check('Today shows the overdue task',
+    await page.locator('.mobile-group-head.is-overdue').isVisible()
+    && await page.locator('.mobile-task-text', { hasText: 'renew the trailer tabs' }).isVisible())
+  check('Today shows tasks due today',
+    await page.locator('.mobile-task-text', { hasText: 'water the ficus' }).isVisible()
+    && await page.locator('.mobile-task-text', { hasText: 'gutter guards' }).isVisible())
+  check('Today tab badge counts overdue + today',
+    (await page.locator('.mobile-tab-badge').innerText()) === '3')
+  check('Priority colors the checkbox', await page.locator('.mobile-check.p1').isVisible())
+  check('Overdue row wears an overdue due-chip',
+    await page.locator('.due-chip.overdue', { hasText: 'Yesterday' }).isVisible())
+  check('Rows outside a project view show their project',
+    await page.locator('.mobile-task-proj', { hasText: 'work stuff' }).isVisible())
 
-  // 2. Capture.
-  await page.locator('.capture-input').fill('brand new thought from the pass')
-  await page.locator('.capture-input').press('Enter')
+  // 2. Checkbox completes a task (it leaves the Today list).
+  await page.locator('.mobile-task', { hasText: 'water the ficus' }).locator('.mobile-check').click()
   await page.waitForTimeout(400)
-  check('Typed capture lands at the top of unsorted',
-    (await page.locator('.mobile-item-text').first().innerText()).includes('brand new thought'))
-
-  // 3. Mic button is offered (Chromium exposes webkitSpeechRecognition).
-  check('Voice capture button is present', await page.locator('.capture-mic').isVisible())
-
-  // 4. Long-press → select mode, then bulk file.
-  const row = page.locator('.mobile-item').first()
-  const box = await row.boundingBox()
-  await page.mouse.move(box.x + 140, box.y + box.height / 2)
-  await page.mouse.down()
-  await page.waitForTimeout(700)
-  await page.mouse.up()
-  await page.waitForTimeout(250)
-  check('Long-press enters select mode', await page.locator('.bulk-bar').isVisible())
-
-  await page.locator('.mobile-item').nth(1).click()
-  await page.waitForTimeout(200)
-  check('Tapping adds to the selection',
-    (await page.locator('.mobile-select-count').innerText()).startsWith('2'))
-
-  await page.locator('.bulk-btn', { hasText: 'File…' }).click()
-  await page.waitForTimeout(300)
-  await page.locator('.mobile-sheet-row', { hasText: 'side projects' }).click()
-  await page.waitForTimeout(500)
-
   let s = await readState(page)
-  const c2 = s.clusters.find(c => c.id === 'c2')
-  check('Bulk file moved both thoughts', c2.globIds.length === 2, `got ${c2.globIds.length}`)
-  check('Filed globs point at the target cluster',
-    c2.globIds.every(id => s.globs.find(g => g.id === id)?.clusterId === 'c2'))
-  check('Select mode exits after filing', !(await page.locator('.bulk-bar').isVisible()))
+  check('Tapping the circle completes the task',
+    s.globs.find(g => g.id === 'g5')?.done === true
+    && !(await page.locator('.mobile-task-text', { hasText: 'water the ficus' }).isVisible()))
 
-  // 5. One undo reverses the whole batch.
-  await page.locator('.undo-redo-btn').first().click()
-  await page.waitForTimeout(600)
+  // 3. Quick add FAB with natural-language date + priority.
+  check('Mic rides in the FAB stack', await page.locator('.mobile-fab-stack .capture-mic').isVisible())
+  await page.locator('.mobile-fab').click()
+  await page.waitForTimeout(350)
+  await page.locator('.mobile-qa-input').fill('brand new thought from the pass tomorrow p1')
+  check('Quick add parses "tomorrow" into the date chip live',
+    await page.locator('.mobile-qa-chip', { hasText: 'Tomorrow' }).isVisible())
+  await page.locator('.mobile-qa-input').press('Enter')
+  await page.waitForTimeout(300)
+  check('Quick add stays open for rapid fire',
+    await page.locator('.mobile-qa-input').isVisible()
+    && (await page.locator('.mobile-qa-input').inputValue()) === '')
+  await closeSheet(page)
   s = await readState(page)
-  check('A single undo reverses the whole batch',
-    s.clusters.find(c => c.id === 'c2').globIds.length === 0)
+  const added = s.globs.find(g => g.text === 'brand new thought from the pass')
+  check('NL tokens lift out: due tomorrow, P1, a to-do',
+    added?.dueDate === TOMORROW && added?.priority === 1 && added?.isTodo === true,
+    JSON.stringify({ due: added?.dueDate, prio: added?.priority }))
 
-  // 6. Search filters the list.
+  // 4. Upcoming groups by date.
+  await page.locator('.mobile-tab', { hasText: 'Upcoming' }).click()
+  await page.waitForTimeout(300)
+  check('Upcoming shows the tomorrow group',
+    await page.locator('.mobile-group-head', { hasText: 'Tomorrow' }).isVisible()
+    && await page.locator('.mobile-task-text', { hasText: 'brand new thought' }).isVisible())
+
+  // 5. Search reaches everything — including the repaired orphan.
+  await page.locator('.mobile-tab', { hasText: 'Search' }).click()
+  await page.waitForTimeout(300)
+  check('State repair: orphaned glob is rendered, not lost',
+    await page.locator('.mobile-task-text', { hasText: 'ORPHANED THOUGHT' }).isVisible())
   await page.locator('.mobile-search input').fill('degreaser')
   await page.waitForTimeout(400)
-  check('Search narrows to matches', (await page.locator('.mobile-item').count()) === 1,
-    `${await page.locator('.mobile-item').count()} rows`)
-  check('Search reaches inside clusters',
-    (await page.locator('.mobile-item-text').first().innerText()).includes('degreaser'))
+  check('Search narrows to matches', (await page.locator('.mobile-task').count()) === 1,
+    `${await page.locator('.mobile-task').count()} rows`)
   await page.locator('.mobile-search input').fill('')
-  await page.waitForTimeout(300)
-
-  // 7. Filter chips.
+  await page.waitForTimeout(200)
   await page.locator('.mobile-chip', { hasText: 'Flagged' }).click()
-  await page.waitForTimeout(400)
-  check('Flagged filter works', (await page.locator('.mobile-item').count()) === 1)
-  await page.locator('.mobile-chip', { hasText: 'All' }).click()
   await page.waitForTimeout(300)
+  check('Flagged filter works', (await page.locator('.mobile-task').count()) === 1)
+  await page.locator('.mobile-chip', { hasText: 'All' }).click()
 
-  // 8. Swipe to delete.
-  const before = (await readState(page)).globs.length
-  const target = page.locator('.mobile-item').first()
-  const tb = await target.boundingBox()
-  await page.mouse.move(tb.x + tb.width - 40, tb.y + tb.height / 2)
+  // 6. Browse: inbox + projects with drill-in.
+  await page.locator('.mobile-tab', { hasText: 'Browse' }).click()
+  await page.waitForTimeout(300)
+  check('Browse lists Inbox and the projects',
+    await page.locator('.mobile-browse-row', { hasText: 'Inbox' }).isVisible()
+    && await page.locator('.mobile-browse-row', { hasText: 'work stuff' }).isVisible()
+    && await page.locator('.mobile-browse-row', { hasText: 'side projects' }).isVisible())
+
+  await page.locator('.mobile-browse-row', { hasText: 'work stuff' }).click()
+  await page.waitForTimeout(300)
+  check('Project view opens with its tasks',
+    await page.locator('.mobile-proj-title', { hasText: 'work stuff' }).isVisible()
+    && await page.locator('.mobile-task-text', { hasText: 'order degreaser' }).isVisible())
+
+  // 7. Task detail sheet: set priority.
+  await page.locator('.mobile-task', { hasText: 'order degreaser' }).click()
+  await page.waitForTimeout(350)
+  check('Tapping a row opens its detail sheet',
+    await page.locator('.mobile-detail-text').isVisible())
+  await page.locator('.mobile-prio-btn', { hasText: 'P2' }).click()
+  await page.waitForTimeout(200)
+  await closeSheet(page)
+  s = await readState(page)
+  check('Detail sheet sets priority', s.globs.find(g => g.id === 'g7')?.priority === 2)
+
+  // 8. Swipe left → schedule sheet; pick tomorrow.
+  const gutter = page.locator('.mobile-task', { hasText: 'gutter guards' })
+  let box = await gutter.boundingBox()
+  await page.mouse.move(box.x + box.width - 60, box.y + box.height / 2)
   await page.mouse.down()
   for (let i = 1; i <= 10; i++) {
-    await page.mouse.move(tb.x + tb.width - 40 - i * 20, tb.y + tb.height / 2)
+    await page.mouse.move(box.x + box.width - 60 - i * 14, box.y + box.height / 2)
   }
   await page.mouse.up()
-  await page.waitForTimeout(600)
-  const after = (await readState(page)).globs.length
-  check('Swipe-left deletes one row', after === before - 1, `${before} → ${after}`)
+  await page.waitForTimeout(400)
+  check('Swipe left opens the schedule sheet',
+    await page.locator('.mobile-sheet-row', { hasText: 'Tomorrow' }).isVisible())
+  await page.locator('.mobile-sheet-row', { hasText: 'Tomorrow' }).click()
+  await page.waitForTimeout(300)
+  s = await readState(page)
+  check('Schedule sheet sets the due date', s.globs.find(g => g.id === 'g6')?.dueDate === TOMORROW)
 
-  // 9. A vertical scroll must not delete anything.
-  const beforeScroll = (await readState(page)).globs.length
-  const t2 = await page.locator('.mobile-item').first().boundingBox()
+  // 9. Swipe right → complete; lands under the Completed toggle.
+  box = await gutter.boundingBox()
+  await page.mouse.move(box.x + 40, box.y + box.height / 2)
+  await page.mouse.down()
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(box.x + 40 + i * 14, box.y + box.height / 2)
+  }
+  await page.mouse.up()
+  await page.waitForTimeout(500)
+  s = await readState(page)
+  check('Swipe right completes the task', s.globs.find(g => g.id === 'g6')?.done === true)
+  check('Completed tasks fold away in the project view',
+    await page.locator('.mobile-completed-toggle', { hasText: 'Completed' }).isVisible()
+    && !(await page.locator('.mobile-task-text', { hasText: 'gutter guards' }).isVisible()))
+  await page.locator('.mobile-completed-toggle').click()
+  await page.waitForTimeout(200)
+  check('Completed toggle reveals them',
+    await page.locator('.mobile-task-text', { hasText: 'gutter guards' }).isVisible())
+
+  // 10. A vertical scroll must not swipe anything.
+  const beforeScroll = (await readState(page)).globs
+  const t2 = await page.locator('.mobile-task').first().boundingBox()
   await page.mouse.move(t2.x + t2.width / 2, t2.y + t2.height / 2)
   await page.mouse.down()
   for (let i = 1; i <= 8; i++) {
@@ -164,8 +230,50 @@ const readState = async page => {
   }
   await page.mouse.up()
   await page.waitForTimeout(400)
-  check('A drifting vertical scroll deletes nothing',
-    (await readState(page)).globs.length === beforeScroll)
+  const afterScroll = (await readState(page)).globs
+  check('A drifting vertical scroll changes nothing',
+    JSON.stringify(afterScroll.map(g => [g.id, g.done, g.dueDate]))
+    === JSON.stringify(beforeScroll.map(g => [g.id, g.done, g.dueDate])))
+
+  // 11. Long-press → select mode → bulk move → single undo.
+  const row = page.locator('.mobile-task', { hasText: 'order degreaser' })
+  box = await row.boundingBox()
+  await page.mouse.move(box.x + 140, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.waitForTimeout(700)
+  await page.mouse.up()
+  await page.waitForTimeout(250)
+  check('Long-press enters select mode', await page.locator('.bulk-bar').isVisible())
+  await page.locator('.mobile-task', { hasText: 'gutter guards' }).click()
+  await page.waitForTimeout(200)
+  check('Tapping adds to the selection',
+    (await page.locator('.mobile-select-count').innerText()).startsWith('2'))
+  await page.locator('.bulk-btn', { hasText: 'Move…' }).click()
+  await page.waitForTimeout(300)
+  await page.locator('.mobile-sheet-row', { hasText: 'side projects' }).click()
+  await page.waitForTimeout(500)
+  s = await readState(page)
+  check('Bulk move filed both into the target project',
+    s.clusters.find(c => c.id === 'c2')?.globIds.length === 2)
+  check('Select mode exits after the batch', !(await page.locator('.bulk-bar').isVisible()))
+  await page.locator('.undo-redo-btn').first().click()
+  await page.waitForTimeout(600)
+  s = await readState(page)
+  check('A single undo reverses the whole batch',
+    s.clusters.find(c => c.id === 'c2')?.globIds.length === 0)
+
+  // 12. New project from Browse.
+  await page.locator('.mobile-tab', { hasText: 'Browse' }).click()
+  await page.waitForTimeout(300)
+  await page.locator('.mobile-browse-row.is-add').click()
+  await page.waitForTimeout(300)
+  await page.locator('.mobile-sheet .mobile-qa-input').fill('reading list')
+  await page.locator('.mobile-prompt-btn', { hasText: 'Create' }).click()
+  await page.waitForTimeout(400)
+  s = await readState(page)
+  check('Add project creates an empty cluster',
+    s.clusters.some(c => c.name === 'reading list')
+    && await page.locator('.mobile-browse-row', { hasText: 'reading list' }).isVisible())
 
   check('No console errors (mobile)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()
@@ -178,6 +286,28 @@ const readState = async page => {
   check('Desktop clusters render', (await page.locator('.cluster').count()) >= 2)
   check('Desktop capture bar has the mic', await page.locator('.capture-mic').isVisible())
   check('Undo bar hidden with no history', (await page.locator('.undo-redo-bar').count()) === 0)
+
+  // The mobile additions reflect back: due chips on rows and globs.
+  check('Cluster item wears its due-chip',
+    await page.locator('.cluster-glob-item .due-chip').first().isVisible())
+  check('Free glob wears its due-chip',
+    await page.locator('.glob .due-chip').first().isVisible())
+  check('Priority colors the desktop todo-check',
+    await page.locator('.todo-check.p2').first().isVisible())
+
+  // Schedule from the context menu.
+  await page.locator('.cluster-glob-item', { hasText: 'order degreaser' }).click({ button: 'right' })
+  await page.waitForTimeout(300)
+  check('Glob context menu offers Due date + Priority',
+    await page.locator('.ctx-menu button', { hasText: 'Due date' }).isVisible()
+    && await page.locator('.ctx-menu button', { hasText: 'Priority' }).isVisible())
+  await page.locator('.ctx-menu button', { hasText: 'Due date' }).click()
+  await page.waitForTimeout(250)
+  await page.locator('.schedule-popover button', { hasText: 'Today' }).click()
+  const s = await readState(page)
+  check('Desktop schedule popover sets the date',
+    s.globs.find(g => g.id === 'g7')?.dueDate === TODAY)
+
   check('No console errors (desktop)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()
 }

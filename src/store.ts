@@ -125,7 +125,9 @@ function hydrateState(saved: { globs?: Partial<Glob>[]; clusters?: Partial<Clust
  */
 export function stateSignature(state: GalaxyState): string {
   return JSON.stringify({
-    globs: state.globs.map(g => [g.id, g.text, g.color, g.flagged, g.isTodo, g.done, g.clusterId]),
+    // dueDate/priority must be in here or scheduling a task would never reach
+    // localStorage — the autosave loop only writes when the signature moves.
+    globs: state.globs.map(g => [g.id, g.text, g.color, g.flagged, g.isTodo, g.done, g.clusterId, g.dueDate ?? null, g.priority ?? 4]),
     clusters: state.clusters.map(c => [c.id, c.name, c.color, c.collapsed, c.role, c.globIds]),
     connections: state.connections.map(cn => [cn.id, cn.cluster1Id, cn.cluster2Id, cn.color]),
   })
@@ -348,6 +350,8 @@ export function makeGlob(text: string, cx: number, cy: number): Glob {
     clusterId: null,
     createdAt: Date.now(),
     blobSeed: Math.random() * 1000,
+    dueDate: null,
+    priority: 4,
   }
 }
 
