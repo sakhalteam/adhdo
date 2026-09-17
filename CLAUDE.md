@@ -126,6 +126,7 @@ mapped 1:1 onto the shared state so desktop and phone are two windows on one gal
    - `saveRemote` archives **the row it is about to replace** — before the upsert, never after, since afterwards there is nothing left to copy. So a version really is "the previous save", not a copy of whatever the saving device happened to hold.
    - `shouldArchive` (pure, tested) decides: **any write that shrinks the galaxy** (the shape of every data loss this app has had — compared against `getRemoteBase()`, not our own previous state, or a device arriving with less than the cloud would slip through), else a 6-hourly cadence. ⚠️ Growth doesn't trip it, which is why **a restore passes `archive: true` explicitly** — a rollback you can't roll back is not a safety net.
    - Best-effort throughout: failing to keep a backup must never cost you the save.
+   - ⚠️ **`archiveRemote` stamps the ATTEMPT, not the success, and does it first.** Because the SQL is a manual step, "no `galaxy_versions` table" is the default state, not a fault — and a stamp that only moved on success left `shouldArchive` seeing `null` for ever, so every save fetched the whole document and posted a doomed insert. On mobile data that is the entire galaxy downloaded per save. Stamping up front backs a missing table (or a flaky network) off to the ordinary cadence, and still self-heals: nothing to clear once the table exists, and a shrinking write ignores the stamp anyway. Not running the SQL is therefore genuinely free — `scripts/sync-check.mjs` asserts all four halves of that.
    - A Postgres trigger prunes to the newest 20 per user. In the database so a client that dies mid-save can't leave history unbounded. No UPDATE policy on the table — history is not editable in place.
 2. **Export / import.** ⚠️ **Import MERGES, it does not replace.** It used to `setState(() => incoming)`, which made the recovery tool one more way to lose everything — pick a stale file and the thoughts you captured since are gone. `parseImport` also accepts a bare galaxy blob, because the thing you reach for in a panic is often localStorage copied out of a console.
 3. **Rescue slot** — see the sync section above.
@@ -174,7 +175,7 @@ the autofocused capture bar.
 ⚠️ **`stateSignature` ignores x/y/velocity, so a drag alone never reaches
 localStorage.** Assert positions against the DOM (`boundingBox()`), not the saved state.
 
-`node scripts/sync-check.mjs` — 58 assertions on the sync and backup layers. **No browser, no dev
+`node scripts/sync-check.mjs` — 63 assertions on the sync and backup layers. **No browser, no dev
 server, no dependencies**: Node strips the types off `src/store.ts` on import, a Map
 stands in for `localStorage` (one sandbox per simulated device, which is what an
 installed PWA actually is), and a fake `galaxy_states` table hands back Postgres-shaped
@@ -183,8 +184,9 @@ deletions in both directions with and without a common ancestor, and an end-to-e
 of the morning that broke it — capture five notes signed out, sign in, and assert the
 clusters are still there — plus the rescue slot and the restore procedure that gets a
 wrongly-emptied galaxy back, the `shouldArchive` policy, a version-history round trip
-(overwrite the galaxy, find the previous save in the list, load it back), and the
-export/import round trip. Restore either half of the 2026-09-17 sync bug and 8 assertions
+(overwrite the galaxy, find the previous save in the list, load it back), the
+missing-`galaxy_versions` path (no retry storm, saves unaffected, a shrinking write
+still tried, and it heals when the table appears), and the export/import round trip. Restore either half of the 2026-09-17 sync bug and 8 assertions
 fail, including one that prints the screenshot Nic sent: only the five notes.
 
 The fake Supabase client serves **both** tables — `galaxy_states` (one row, upserted) and

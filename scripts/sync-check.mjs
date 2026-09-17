@@ -42,7 +42,7 @@ const {
 let clock = Date.parse('2026-09-17T09:00:00Z')
 const pgStamp = () => new Date((clock += 60_000)).toISOString().replace('Z', '+00:00')
 
-const makeCloud = () => ({ row: null, writes: 0, versions: [] })
+const makeCloud = () => ({ row: null, writes: 0, versions: [], archiveTries: 0, noVersionsTable: false })
 
 /** Both tables: galaxy_states (one row, upserted) and galaxy_versions (append + prune). */
 const makeClient = cloud => ({
@@ -55,6 +55,12 @@ const makeClient = cloud => ({
         eq(col, val) { q._filters[col] = val; return q },
         order() { return q },
         async insert(row) {
+          cloud.archiveTries++
+          // A project where supabase/galaxy_versions.sql was never run. Not an
+          // error case — it is the default until someone opens the SQL editor.
+          if (cloud.noVersionsTable) {
+            return { data: null, error: { message: 'relation "galaxy_versions" does not exist' } }
+          }
           cloud.versions.unshift({ id: `v${cloud.versions.length + 1}`, created_at: pgStamp(), ...row })
           // The pruning trigger, in miniature.
           cloud.versions = cloud.versions.slice(0, 20)
@@ -396,6 +402,43 @@ console.log('\nversion history')
     after.length === 2 && after[0].globCount === 5)
   check('...and the cloud holds the galaxy again',
     cloud.row.state_json.clusters.length === 2)
+}
+
+// ── 6b. the table nobody has created yet ────────────────────────────────────
+// Running the SQL is a manual step, so "no galaxy_versions" is the DEFAULT
+// state, not a fault. It must cost nothing and must heal itself.
+console.log('\nversion history, before the SQL is run')
+{
+  const cloud = makeCloud()
+  cloud.noVersionsTable = true
+  const client = makeClient(cloud)
+
+  useDevice('no-table')
+  await devicePush(client, galaxy())
+  const triesAfterFirst = cloud.archiveTries
+
+  // Ordinary saves, one after another. Without the attempt stamp these each
+  // fetched the whole document and posted a doomed insert, for ever.
+  await saveRemote(client, galaxy(), { force: true })
+  await saveRemote(client, galaxy(), { force: true })
+  check('a missing versions table does not retry on every save',
+    cloud.archiveTries === triesAfterFirst, `tries: ${cloud.archiveTries}`)
+  check('...and saving still works regardless',
+    cloud.row.state_json.globs.length === 4)
+  check('...and the history list is empty rather than broken',
+    (await listVersions(client)).length === 0)
+
+  // The snapshot that matters is never the one skipped.
+  const shrunk = { globs: galaxy().globs.slice(0, 1), clusters: [], connections: [] }
+  await saveRemote(client, shrunk, { force: true })
+  check('a shrinking write still tries, stamp or no stamp',
+    cloud.archiveTries === triesAfterFirst + 1)
+
+  // Run the SQL: the next attempt just works, with nothing to clear.
+  cloud.noVersionsTable = false
+  await saveRemote(client, galaxy(), { force: true, archive: true })
+  check('creating the table later heals it with no flag to clear',
+    (await listVersions(client)).length === 1)
 }
 
 // ── 7. export / import ──────────────────────────────────────────────────────

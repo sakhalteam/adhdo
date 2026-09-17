@@ -566,6 +566,19 @@ function getArchivedAt(): string | null {
  * backup is never a reason to refuse to save the thought you just typed.
  */
 async function archiveRemote(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  // Stamp the ATTEMPT, not the success, and do it first.
+  //
+  // `galaxy_versions` is created by a SQL file run by hand, so "the table does
+  // not exist" is an ordinary state, not an error case. A stamp that only moved
+  // on success would leave `shouldArchive` seeing `null` forever and returning
+  // true on every single save — a full document fetch plus a doomed insert,
+  // every time, on mobile data. Stamping here backs a missing table (or a flaky
+  // network) off to the ordinary cadence instead of retrying in a loop.
+  //
+  // It still self-heals: nothing to clear once the table exists, the next
+  // cadence tick picks it up, and a write that SHRINKS the galaxy ignores the
+  // stamp entirely — so the snapshot that matters most is never the one skipped.
+  localStorage.setItem(VERSION_AT_KEY, new Date().toISOString())
   try {
     const { data, error } = await supabase
       .from('galaxy_states')
@@ -583,7 +596,6 @@ async function archiveRemote(supabase: SupabaseClient, userId: string): Promise<
       saved_at: data.updated_at,
     })
     if (insertError) return false
-    localStorage.setItem(VERSION_AT_KEY, new Date().toISOString())
     return true
   } catch {
     return false
