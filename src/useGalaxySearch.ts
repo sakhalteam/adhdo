@@ -56,23 +56,30 @@ export function useGalaxySearch({
     return nextResults.slice(0, 30)
   }, [clusters, globs, query])
 
+  /**
+   * Bring one glob into view: expand and centre its cluster, then pulse it.
+   * Shared with the agenda panel — "show me where this lives" has to mean the
+   * same thing whether you got here from Cmd+K or from what's due today.
+   */
+  const jumpToGlob = (globId: string) => {
+    const glob = globs.find(g => g.id === globId)
+    if (glob?.clusterId) {
+      const parent = clusters.find(cluster => cluster.id === glob.clusterId)
+      if (parent?.collapsed) onToggleClusterCollapse(parent.id)
+      if (parent) focusCluster(parent.id, { center: true, pulse: false })
+    }
+    onHighlight(globId)
+  }
+
   const jumpToResult = (result: SearchResult) => {
     if (result.type === 'cluster') {
       focusCluster(result.id, { center: true })
       onCloseSearch()
       return
     }
-
-    const glob = globs.find(g => g.id === result.id)
-    if (glob?.clusterId) {
-      const parent = clusters.find(cluster => cluster.id === glob.clusterId)
-      if (parent?.collapsed) onToggleClusterCollapse(parent.id)
-      if (parent) focusCluster(parent.id, { center: true, pulse: false })
-    }
-
-    onHighlight(result.id)
+    jumpToGlob(result.id)
     onCloseSearch()
   }
 
-  return { results, jumpToResult }
+  return { results, jumpToResult, jumpToGlob }
 }

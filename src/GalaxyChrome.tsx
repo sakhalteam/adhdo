@@ -4,6 +4,7 @@ import type { Cluster, Connection, Glob, Priority } from './types'
 import type { SearchResult } from './useGalaxySearch'
 import { PALETTE } from './store'
 import { addDaysStr, formatDue, nextWeekdayStr, todayStr } from './dates'
+import type { Agenda } from './agenda'
 
 export type RecolorTarget =
   | { kind: 'glob'; id: string }
@@ -453,16 +454,37 @@ export function ConnectionLayer({
 export function ClusterTools({
   clusterCount,
   browserOpen,
+  agendaOpen,
+  agendaCount,
   onOrganize,
   onToggleBrowser,
+  onToggleAgenda,
 }: {
   clusterCount: number
   browserOpen: boolean
+  agendaOpen: boolean
+  /** Overdue + due today — the same number the phone puts on its Today tab. */
+  agendaCount: number
   onOrganize: () => void
   onToggleBrowser: () => void
+  onToggleAgenda: () => void
 }) {
   return (
     <div className="cluster-tools" onClick={e => e.stopPropagation()}>
+      <button
+        className={`cluster-tool-btn agenda-toggle ${agendaOpen ? 'active' : ''}`}
+        onClick={onToggleAgenda}
+        title="What's due (agenda)"
+        aria-label="What's due (agenda)"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="16" rx="3" />
+          <line x1="3" y1="9.5" x2="21" y2="9.5" />
+          <line x1="8" y1="2.5" x2="8" y2="6.5" />
+          <line x1="16" y1="2.5" x2="16" y2="6.5" />
+        </svg>
+        {agendaCount > 0 && <span className="agenda-badge">{agendaCount > 99 ? '99+' : agendaCount}</span>}
+      </button>
       <button
         className="cluster-tool-btn"
         onClick={onOrganize}
@@ -519,6 +541,113 @@ export function ClusterBrowser({
               <span className="cluster-browser-name">{cluster.name}</span>
               <span className="cluster-browser-meta">{cluster.globIds.length} items</span>
             </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The desktop answer to the phone's Today / Upcoming tabs.
+ *
+ * Due dates were reachable on desktop from the moment mobile got them, but only
+ * one glob at a time, through a context menu — there was no way to ask "what is
+ * actually due?" without reading the whole galaxy. This is that question, docked.
+ *
+ * It is a DOCK, not a menu: it survives clicks on the galaxy (you tick things off
+ * while working) and closes only on its own button or Esc. Everything it shows
+ * comes from `buildAgenda`, the same function the phone's tabs call.
+ */
+export function AgendaPanel({
+  agenda,
+  clusters,
+  onToggleDone,
+  onJump,
+  onClose,
+}: {
+  agenda: Agenda
+  clusters: Cluster[]
+  onToggleDone: (globId: string) => void
+  onJump: (globId: string) => void
+  onClose: () => void
+}) {
+  const clusterName = (glob: Glob) =>
+    glob.clusterId ? clusters.find(c => c.id === glob.clusterId) : undefined
+
+  const row = (glob: Glob, showDue: boolean) => {
+    const cluster = clusterName(glob)
+    // A row with nothing to say shouldn't reserve a line to say it in.
+    const hasMeta = (showDue && !!glob.dueDate) || glob.flagged || !!cluster
+    return (
+      <div
+        className="agenda-row"
+        key={glob.id}
+        onClick={() => onJump(glob.id)}
+        title="Show me where this lives"
+      >
+        <button
+          className={`todo-check p${glob.priority ?? 4}`}
+          aria-label="Mark done"
+          onClick={e => { e.stopPropagation(); onToggleDone(glob.id) }}
+        />
+        <span className="agenda-row-body">
+          <span className="agenda-row-text">{glob.text}</span>
+          {hasMeta && <span className="agenda-row-meta">
+            {showDue && glob.dueDate && <DueChip dueDate={glob.dueDate} />}
+            {glob.flagged && <span className="agenda-row-flag">🚩</span>}
+            {cluster && (
+              <span className="agenda-row-cluster">
+                <span className="agenda-dot" style={{ background: cluster.color }} />
+                {cluster.name}
+              </span>
+            )}
+          </span>}
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="agenda-panel" onClick={e => e.stopPropagation()}>
+      <div className="agenda-head">
+        <span className="agenda-title">agenda</span>
+        <button className="agenda-close" onClick={onClose} aria-label="Close agenda">✕</button>
+      </div>
+
+      {agenda.total === 0 ? (
+        <div className="agenda-empty">
+          Nothing scheduled.
+          <span>Right-click a glob → 📅 Due date to put it on the calendar.</span>
+        </div>
+      ) : (
+        <div className="agenda-scroll">
+          {agenda.overdue.length > 0 && (
+            <section className="agenda-section">
+              <div className="agenda-section-head is-overdue">
+                overdue<span className="agenda-count">{agenda.overdue.length}</span>
+              </div>
+              {agenda.overdue.map(g => row(g, true))}
+            </section>
+          )}
+
+          {agenda.today.length > 0 && (
+            <section className="agenda-section">
+              <div className="agenda-section-head is-today">
+                today<span className="agenda-count">{agenda.today.length}</span>
+              </div>
+              {agenda.today.map(g => row(g, false))}
+            </section>
+          )}
+
+          {agenda.upcoming.map(group => (
+            <section className="agenda-section" key={group.date}>
+              <div className="agenda-section-head">
+                {formatDue(group.date).label}
+                <span className="agenda-count">{group.items.length}</span>
+              </div>
+              {group.items.map(g => row(g, false))}
+            </section>
           ))}
         </div>
       )}
@@ -1575,6 +1704,8 @@ export function HelpPanel({
             <div className="help-item"><span className="help-action">Drag</span> from any selected item to carry the whole selection: drop on a cluster to file it there, on empty space to make a new one, or on the trash to bin the lot</div>
             <div className="help-item"><span className="help-action">Double-click</span> the <span className="help-mono">&#x2807;</span> handle beside a cluster item to make it a to-do</div>
             <div className="help-item"><kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo</div>
+            <div className="help-item"><span className="help-action">Click</span> the calendar icon for the agenda — everything due, newest first; click a row to fly to it</div>
+            <div className="help-item"><span className="help-action">Right-click</span> a glob → <span className="help-mono">📅 Due date</span> or <span className="help-mono">⚑ Priority</span> (both show up on your phone)</div>
             <div className="help-item"><kbd>Ctrl</kbd>+<kbd>K</kbd> to search, <kbd>Esc</kbd> to close menus</div>
           </div>
 

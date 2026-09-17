@@ -278,7 +278,7 @@ export default function App() {
 
   const refocusInput = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement
-    if (target.closest('.cluster, .glob, .ctx-menu, .trash-toast, .shake-modal, .help-trigger, .search-modal, .new-glob-input, .onboarding-panel, .cluster-tools, .cluster-browser')) {
+    if (target.closest('.cluster, .glob, .ctx-menu, .trash-toast, .shake-modal, .help-trigger, .search-modal, .new-glob-input, .onboarding-panel, .cluster-tools, .cluster-browser, .agenda-panel')) {
       return
     }
     inputRef.current?.focus()

@@ -4,6 +4,7 @@ import type { VoiceCapture } from './useVoiceCapture'
 import { MicButton, VoiceOverlay } from './AppChrome'
 import { PALETTE } from './store'
 import { addDaysStr, formatDue, nextWeekdayStr, parseQuickAdd, todayStr } from './dates'
+import { buildAgenda } from './agenda'
 
 // ── Mobile view: Todoist-shaped ─────────────────────────────────────────────
 // The galaxy is a desktop instrument; on a phone adhdo runs a straight task
@@ -80,17 +81,6 @@ const FILTERS: { id: Filter; label: string }[] = [
 
 const PRIORITIES: Priority[] = [1, 2, 3, 4]
 
-/** Overdue first, then by date, then P1 before P4, then oldest capture first. */
-function byUrgency(a: Glob, b: Glob): number {
-  const da = a.dueDate ?? '9999-99-99'
-  const db = b.dueDate ?? '9999-99-99'
-  if (da !== db) return da < db ? -1 : 1
-  const pa = a.priority ?? 4
-  const pb = b.priority ?? 4
-  if (pa !== pb) return pa - pb
-  return a.createdAt - b.createdAt
-}
-
 export default function MobileApp(props: Props) {
   const { state, onboardingActive, voice } = props
   const [tab, setTabRaw] = useState<Tab>('today')
@@ -130,30 +120,14 @@ export default function MobileApp(props: Props) {
     [state.globs],
   )
 
-  const openTodos = useMemo(() => state.globs.filter(g => g.isTodo && !g.done), [state.globs])
-  const overdue = useMemo(
-    () => openTodos.filter(g => g.dueDate && g.dueDate < today).sort(byUrgency),
-    [openTodos, today],
-  )
-  const dueToday = useMemo(
-    () => openTodos.filter(g => g.dueDate === today).sort(byUrgency),
-    [openTodos, today],
-  )
-  const todayCount = overdue.length + dueToday.length
-
-  // Everything scheduled past today, grouped per calendar day, soonest first.
-  const upcomingGroups = useMemo(() => {
-    const groups = new Map<string, Glob[]>()
-    for (const g of openTodos) {
-      if (!g.dueDate || g.dueDate <= today) continue
-      const list = groups.get(g.dueDate) ?? []
-      list.push(g)
-      groups.set(g.dueDate, list)
-    }
-    return [...groups.entries()]
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([date, items]) => ({ date, items: items.sort(byUrgency) }))
-  }, [openTodos, today])
+  // Buckets come from the shared agenda so the desktop panel and these tabs
+  // can never disagree about what "due today" means.
+  const {
+    overdue,
+    today: dueToday,
+    upcoming: upcomingGroups,
+    todayCount,
+  } = useMemo(() => buildAgenda(state.globs, today), [state.globs, today])
 
   const matches = useCallback((g: Glob) => {
     if (filter === 'todo' && (!g.isTodo || g.done)) return false

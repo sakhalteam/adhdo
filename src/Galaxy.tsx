@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import type { Glob, Cluster, GalaxyState, Priority } from './types'
 import {
+  AgendaPanel,
   ClusterBrowser,
   ClusterCard,
   ClusterTools,
@@ -23,6 +24,7 @@ import { useGalaxySearch } from './useGalaxySearch'
 import { useGlobDrop } from './useGlobDrop'
 import { useGroupDrag } from './useGroupDrag'
 import { useMarqueeSelection } from './useMarqueeSelection'
+import { buildAgenda } from './agenda'
 
 interface Props {
   state: GalaxyState
@@ -141,6 +143,8 @@ export default function Galaxy({
   const [lastGlobPrompt, setLastGlobPrompt] = useState<{ globId: string; clusterId: string; x: number; y: number } | null>(null)
   const [addingToClusterId, setAddingToClusterId] = useState<string | null>(null)
   const [clusterBrowserOpen, setClusterBrowserOpen] = useState(false)
+  /** The agenda dock. Deliberately NOT in closeMenus — see closeTransientUi. */
+  const [agendaOpen, setAgendaOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [helpPinned, setHelpPinned] = useState(false)
   const [clearConfirm, setClearConfirm] = useState(false)
@@ -190,6 +194,7 @@ export default function Galaxy({
     closeMenus()
     cancelSelection()
     clearSelection()
+    setAgendaOpen(false)
   }, [closeMenus, cancelSelection, clearSelection])
 
   const {
@@ -227,7 +232,7 @@ export default function Galaxy({
     onClearFocusedCluster: () => setFocusedClusterId(null),
   })
 
-  const { results: searchResults, jumpToResult } = useGalaxySearch({
+  const { results: searchResults, jumpToResult, jumpToGlob } = useGalaxySearch({
     query: searchQ,
     globs,
     clusters,
@@ -335,6 +340,7 @@ export default function Galaxy({
     return a.name.localeCompare(b.name)
   })
   const globById = useMemo(() => new Map(globs.map(g => [g.id, g])), [globs])
+  const agenda = useMemo(() => buildAgenda(globs), [globs])
   const clusterGlobs = (c: Cluster) =>
     c.globIds.map(id => globById.get(id)).filter(Boolean) as Glob[]
   const viewportW = typeof window !== 'undefined' ? window.innerWidth : 1200
@@ -439,9 +445,22 @@ export default function Galaxy({
       <ClusterTools
         clusterCount={clusters.length}
         browserOpen={clusterBrowserOpen}
+        agendaOpen={agendaOpen}
+        agendaCount={agenda.todayCount}
         onOrganize={organizeClusters}
         onToggleBrowser={() => setClusterBrowserOpen(v => !v)}
+        onToggleAgenda={() => setAgendaOpen(v => !v)}
       />
+
+      {agendaOpen && (
+        <AgendaPanel
+          agenda={agenda}
+          clusters={clusters}
+          onToggleDone={onToggleDone}
+          onJump={jumpToGlob}
+          onClose={() => setAgendaOpen(false)}
+        />
+      )}
 
       {clusterBrowserOpen && (
         <ClusterBrowser

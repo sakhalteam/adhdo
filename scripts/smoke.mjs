@@ -308,6 +308,48 @@ const closeSheet = async page => {
   check('Desktop schedule popover sets the date',
     s.globs.find(g => g.id === 'g7')?.dueDate === TODAY)
 
+  // ── the agenda dock: desktop's answer to the phone's Today tab ──
+  // Seed has one overdue + two due today; the popover above just added a third.
+  check('Agenda badge counts overdue + today',
+    (await page.locator('.agenda-badge').innerText()) === '4',
+    await page.locator('.agenda-badge').innerText())
+
+  await page.locator('.agenda-toggle').click()
+  await page.waitForTimeout(400)
+  check('Agenda panel opens', await page.locator('.agenda-panel').isVisible())
+  check('Agenda splits overdue from today',
+    await page.locator('.agenda-section-head.is-overdue').isVisible()
+    && await page.locator('.agenda-section-head.is-today').isVisible())
+  check('A task scheduled from the context menu lands in the agenda',
+    await page.locator('.agenda-row-text', { hasText: 'order degreaser' }).isVisible())
+  check('Agenda names the cluster a task lives in',
+    await page.locator('.agenda-row-cluster', { hasText: 'work stuff' }).first().isVisible())
+  check('Undated thoughts stay off the agenda',
+    !(await page.locator('.agenda-row-text', { hasText: 'podcast about attention' }).isVisible()))
+
+  // It is a dock, not a menu: working the galaxy must not dismiss it.
+  await page.mouse.click(620, 780)
+  await page.waitForTimeout(300)
+  check('The dock survives a click on the galaxy',
+    await page.locator('.agenda-panel').isVisible())
+
+  // Ticking a row off completes the task and drops it from the agenda.
+  await page.locator('.agenda-row', { hasText: 'water the ficus' }).locator('.todo-check').click()
+  await page.waitForTimeout(400)
+  check('Ticking an agenda row completes the task',
+    !(await page.locator('.agenda-row-text', { hasText: 'water the ficus' }).isVisible())
+    && (await page.locator('.agenda-badge').innerText()) === '3')
+
+  // Clicking a row flies to the glob: its cluster expands and it pulses.
+  await page.locator('.agenda-row', { hasText: 'gutter guards' }).click()
+  await page.waitForTimeout(500)
+  check('Clicking an agenda row highlights the glob in the galaxy',
+    await page.locator('.cluster-glob-item.highlight-pulse').first().isVisible())
+
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(300)
+  check('Esc closes the dock', (await page.locator('.agenda-panel').count()) === 0)
+
   check('No console errors (desktop)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()
 }
