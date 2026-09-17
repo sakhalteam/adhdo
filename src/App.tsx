@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { loadLocal, saveLocal, saveRemote, loadRemote, getLocalUpdatedAt, touchLocal, isNewer, isDirty, setDirty, isEmptyState, mergeStates, hasSeenOnboarding, markOnboardingSeen, stateSignature, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
+import { loadLocal, saveLocal, saveRemote, loadRemote, touchLocal, getRemoteSeen, getRemoteBase, markRemoteSeen, saveRescue, isDirty, setDirty, planSync, hasSeenOnboarding, markOnboardingSeen, stateSignature, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
 import type { RemoteState } from './store'
 import { supabase } from './supabaseClient'
 import type { GalaxyState, Glob, Cluster, Priority } from './types'
@@ -69,20 +69,53 @@ export default function App() {
     lastSavedRef.current = stateSignature(remote.state)
     // Inherit the cloud's stamp rather than claiming we edited just now.
     touchLocal(remote.updatedAt)
+    // We hold it now — and only now is the compare-and-swap allowed to believe
+    // a later save of ours builds on this version.
+    markRemoteSeen(remote.updatedAt, remote.state)
     needsRemoteSave.current = false
     setDirty(false)
   }, [])
 
   /**
-   * Does the cloud copy win? Normally that's just "is it newer", but the first
-   * time a device ever sees the cloud row its local stamp isn't trustworthy — a
-   * fresh install stamps one the moment it boots. An untouched device therefore
-   * yields to the cloud; one holding real captures still defends them.
+   * Fold a cloud copy into what this device holds, writing the result back.
+   *
+   * The one path that reconciles, shared by both directions of sync, because
+   * the question is the same either way: the cloud row carries a version we
+   * never took in, and both copies may hold thoughts the other has never seen.
+   * Picking a winner is what lost the galaxy — signing in after capturing a few
+   * notes offline made the phone look like the freshest writer, and five
+   * seconds later its five notes were the whole cloud.
+   *
+   * `mustPush` is set by the save path, where we already know we're holding
+   * unsaved work; the pull path only writes back when the merge actually added
+   * something the cloud lacks.
    */
-  const cloudWins = useCallback((remote: RemoteState, local: GalaxyState) => {
-    if (remote.firstSight && isEmptyState(local)) return true
-    return isNewer(remote.updatedAt, getLocalUpdatedAt())
-  }, [])
+  const reconcile = useCallback(async (remote: RemoteState, mustPush: boolean) => {
+    const plan = planSync(stateRef.current, remote, {
+      seen: getRemoteSeen(), base: getRemoteBase(), mustPush,
+    })
+    if (plan.action === 'hold') return
+    // Anything this device is about to stop holding goes in the rescue slot
+    // first. A merge cannot tell a real bulk delete from another client having
+    // overwritten the cloud row with less than it held, so it doesn't try —
+    // it just makes sure the fuller copy is still on disk afterwards.
+    if (plan.dropped.length) saveRescue(stateRef.current)
+    if (plan.action === 'adopt') {
+      adoptRemote(remote)
+      flash('pulled')
+      return
+    }
+    const merged = plan.state
+    setStateRaw(merged)
+    saveLocal(merged)
+    lastSavedRef.current = stateSignature(merged)
+    // Force past the compare-and-swap: we've just read the cloud's version and
+    // folded it in, so the merged copy is strictly the most complete one.
+    const ok = (await saveRemote(supabase, merged, { force: true })) === 'saved'
+    needsRemoteSave.current = !ok
+    setDirty(!ok)
+    flash(ok ? 'merged' : 'error')
+  }, [adoptRemote, flash])
 
   /**
    * Push the galaxy to the cloud, reconciling if the cloud moved ahead.
@@ -95,27 +128,10 @@ export default function App() {
     const result = await saveRemote(supabase, s, { force })
 
     if (result === 'stale') {
-      // The cloud holds a version this device never read. Both copies may hold
-      // real thoughts, so union them instead of picking a winner.
+      // The cloud holds a version this device never took in.
       const remote = await loadRemote(supabase)
       if (!remote) { flash('error'); return }
-      // An untouched device has nothing worth merging; just take the cloud copy.
-      if (isEmptyState(stateRef.current)) {
-        adoptRemote(remote)
-        flash('pulled')
-        return
-      }
-      const merged = mergeStates(stateRef.current, remote.state)
-      setStateRaw(merged)
-      saveLocal(merged)
-      lastSavedRef.current = stateSignature(merged)
-      // Force past the compare-and-swap: we've just read the cloud's version and
-      // folded it in, so the merged copy is strictly the most complete one.
-      const after = await saveRemote(supabase, merged, { force: true })
-      const ok = after === 'saved'
-      needsRemoteSave.current = !ok
-      setDirty(!ok)
-      flash(ok ? 'merged' : 'error')
+      await reconcile(remote, true)
       return
     }
 
@@ -123,7 +139,7 @@ export default function App() {
     needsRemoteSave.current = !ok
     setDirty(!ok)
     flash(ok ? 'saved' : 'error')
-  }, [adoptRemote, flash])
+  }, [flash, reconcile])
 
   // Debounced remote save
   const scheduleRemoteSave = useCallback((s: GalaxyState) => {
@@ -150,11 +166,14 @@ export default function App() {
       return
     }
     const remote = await loadRemote(supabase)
-    if (remote && cloudWins(remote, stateRef.current)) {
-      adoptRemote(remote)
-      flash('pulled')
-    }
-  }, [adoptRemote, cloudWins, flash, push])
+    if (!remote) return
+    // No timestamp comparison here on purpose — `planSync` asks whether we
+    // already hold the cloud's contents, not whose clock reads later. Clocks
+    // can't answer it: capturing while signed out moves the local stamp without
+    // the cloud hearing a word, so the device that has seen the least of the
+    // galaxy looks like its freshest writer.
+    await reconcile(remote, false)
+  }, [push, reconcile])
 
   /**
    * Sync on sign-in, when the tab comes back to the foreground, and the moment

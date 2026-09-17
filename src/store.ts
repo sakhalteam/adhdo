@@ -5,6 +5,8 @@ const STORAGE_KEY = 'adhdo-galaxy'
 const UPDATED_AT_KEY = 'adhdo-updated-at'
 const ONBOARDING_SEEN_KEY = 'adhdo-seen-onboarding-v1'
 const REMOTE_SEEN_KEY = 'adhdo-remote-seen'
+const REMOTE_BASE_KEY = 'adhdo-remote-base'
+const RESCUE_KEY = 'adhdo-rescue'
 const DIRTY_KEY = 'adhdo-dirty'
 
 /**
@@ -148,48 +150,70 @@ export function loadLocal(): GalaxyState {
   return { globs: [], clusters: [], connections: [] }
 }
 
-export function getLocalUpdatedAt(): string | null {
-  return localStorage.getItem(UPDATED_AT_KEY)
-}
-
 /**
- * Overwrite the "this device last changed the data" stamp. Used after adopting a
- * cloud copy, to inherit its timestamp rather than claiming we just edited —
- * otherwise every pull would leave this device looking like the freshest writer
- * and it would never pull again.
+ * When this device last changed anything. Informational only since the pull
+ * stopped asking: which copy is "newer" turned out to be the wrong question
+ * (see `markRemoteSeen`), because capturing while signed out advances this
+ * stamp without the cloud hearing a word about it.
  */
 export function touchLocal(at: string) {
   localStorage.setItem(UPDATED_AT_KEY, at)
 }
 
 /**
- * Is `a` strictly newer than `b`? Parsed, never string-compared.
+ * `updated_at` of the cloud row whose contents this device is known to HOLD —
+ * the base version for saveRemote's compare-and-swap.
  *
- * This used to be a raw `>` on the two strings, which is subtly wrong: local
- * stamps come from `toISOString()` and end in `Z`, while Postgres hands back
- * `+00:00`. Compare those lexically and `'Z'` (0x5A) sorts after `'+'` (0x2B),
- * so a cloud copy written in the same second as a local one always *looks*
- * older and the pull silently never happens.
- */
-export function isNewer(a: string | null | undefined, b: string | null | undefined): boolean {
-  if (!a) return false
-  const ta = Date.parse(a)
-  if (Number.isNaN(ta)) return false
-  if (!b) return true
-  const tb = Date.parse(b)
-  return Number.isNaN(tb) ? true : ta > tb
-}
-
-/**
- * `updated_at` of the cloud row this device last read or wrote — the base
- * version for saveRemote's compare-and-swap.
+ * "Holds", not "has read". Reading a copy and then discarding it must never
+ * stamp this, or the compare-and-swap waves through the very overwrite it
+ * exists to catch. That is exactly how a phone that captured five notes while
+ * signed out flattened the cloud galaxy on the next save: the sign-in pull read
+ * the cloud row (stamping it seen), declined to adopt it because the local
+ * stamp was newer, and the save five seconds later sailed through the guard.
+ *
+ * Only `markRemoteSeen` writes it, and only from a Postgres-returned
+ * `updated_at` — never a locally generated ISO string. Both sides of every
+ * comparison are therefore byte-identical echoes of the same column, which is
+ * what makes `===` safe here: mixing in a `toISOString()` stamp would
+ * reintroduce the old `'Z'`-vs-`'+00:00'` mismatch.
  */
 export function getRemoteSeen(): string | null {
   return localStorage.getItem(REMOTE_SEEN_KEY)
 }
 
-function setRemoteSeen(updatedAt: string) {
+/**
+ * The ids the cloud copy we hold was made of — the common ancestor that lets a
+ * later reconcile tell a *new* local record apart from one that was deleted on
+ * another device. Without it the two look identical (present here, absent
+ * there) and you must either lose captures or resurrect deletions.
+ */
+export function getRemoteBase(): Set<string> | null {
+  const raw = localStorage.getItem(REMOTE_BASE_KEY)
+  if (!raw) return null
+  try {
+    const ids = JSON.parse(raw)
+    if (Array.isArray(ids)) return new Set(ids as string[])
+  } catch { /* ignore corrupt data */ }
+  return null
+}
+
+function idsOf(state: GalaxyState): string[] {
+  return [
+    ...state.globs.map(g => g.id),
+    ...state.clusters.map(c => c.id),
+    ...state.connections.map(cn => cn.id),
+  ]
+}
+
+/**
+ * Record that this device now holds the cloud version stamped `updatedAt`, and
+ * what it was made of. Call it on exactly two occasions: adopting a cloud copy,
+ * and a save the cloud accepted. Anything else is a lie the compare-and-swap
+ * will believe.
+ */
+export function markRemoteSeen(updatedAt: string, state: GalaxyState) {
   localStorage.setItem(REMOTE_SEEN_KEY, updatedAt)
+  localStorage.setItem(REMOTE_BASE_KEY, JSON.stringify(idsOf(state)))
 }
 
 /**
@@ -220,23 +244,13 @@ function unionById<T extends { id: string }>(mine: T[], theirs: T[]): T[] {
 }
 
 /**
- * Reconcile this device's galaxy with a cloud copy that moved ahead of it.
+ * Union of both sides, keeping everything either one knows about.
  *
- * Runs in exactly one situation: we tried to save, the compare-and-swap said the
- * cloud holds a version we never read, and both copies contain real thoughts.
- * The alternative — take one side wholesale — means a phone that captured six
- * ideas on a drive loses all of them because the laptop renamed one cluster in
- * the meantime.
- *
- * So: union every collection by id. Records only one side knows about are new
- * captures and are always kept; where both know an id, the cloud wins, since it
- * is by definition the newer document. `repairState` then puts membership back
- * in order, because the two sides may disagree about which cluster holds what.
- *
- * The deliberate trade-off is deletions: with no tombstones, something deleted
- * here but still present in the cloud comes back. That's the right way to be
- * wrong — a thought you have to delete twice is mildly annoying, while one that
- * vanishes silently is exactly the failure this app exists to prevent.
+ * Used when there's no common ancestor to reason from (`getRemoteBase()` is
+ * null — a device that has never completed a sync, or one whose storage was
+ * evicted). Deliberately errs towards resurrection: with nothing to compare
+ * against, a record present here and absent there is indistinguishable from a
+ * new capture, and a thought you have to delete twice beats one that vanishes.
  */
 export function mergeStates(local: GalaxyState, remote: GalaxyState): GalaxyState {
   return repairState({
@@ -244,6 +258,119 @@ export function mergeStates(local: GalaxyState, remote: GalaxyState): GalaxyStat
     clusters: unionById(local.clusters, remote.clusters),
     connections: unionById(local.connections, remote.connections),
   })
+}
+
+/**
+ * Three-way merge of one collection against the ids the last synced copy held.
+ *
+ * `base` is what makes "present here, absent there" answerable. Without it the
+ * two directions are indistinguishable and you have to pick a way to be wrong
+ * for both at once:
+ *
+ *   in both            → the cloud's version; it is the newer document
+ *   here, not there    → in base? deleted on another device, let it go
+ *                        not in base? captured here since the last sync, KEEP
+ *   there, not here    → in base? deleted here, stays deleted
+ *                        not in base? captured elsewhere since the last sync, KEEP
+ *
+ * Local order is preserved and anything new from the cloud is appended.
+ */
+function reconcileList<T extends { id: string }>(mine: T[], theirs: T[], base: Set<string>): T[] {
+  const theirsById = new Map(theirs.map(t => [t.id, t]))
+  const mineIds = new Set(mine.map(m => m.id))
+  const out: T[] = []
+  for (const item of mine) {
+    const match = theirsById.get(item.id)
+    if (match) out.push(match)
+    else if (!base.has(item.id)) out.push(item)
+  }
+  for (const item of theirs) {
+    if (!mineIds.has(item.id) && !base.has(item.id)) out.push(item)
+  }
+  return out
+}
+
+export interface Reconciliation {
+  state: GalaxyState
+  /** True when the result holds records the cloud row doesn't — it must be written back. */
+  needsPush: boolean
+  /** Ids this device held that the merge let go of. Non-empty means take a rescue copy. */
+  dropped: string[]
+}
+
+/**
+ * Fold a cloud copy into what this device holds.
+ *
+ * Runs whenever the cloud row carries a version we have never taken in —
+ * a save that lost the compare-and-swap, or a sign-in that finds thoughts
+ * captured while signed out. Taking one side wholesale is not an option in
+ * either direction: adopt the cloud and the five notes you just typed are gone;
+ * keep local and the entire galaxy on the other device is gone. So merge, using
+ * `base` to tell a new capture apart from a remote deletion.
+ */
+export function reconcileWithRemote(
+  local: GalaxyState,
+  remote: GalaxyState,
+  base: Set<string> | null,
+): Reconciliation {
+  const state = base === null ? mergeStates(local, remote) : repairState({
+    globs: reconcileList(local.globs, remote.globs, base),
+    clusters: reconcileList(local.clusters, remote.clusters, base),
+    connections: reconcileList(local.connections, remote.connections, base),
+  })
+  // Compared on ids, not fields: shared records already took the cloud's values,
+  // so only membership can differ. Both directions count — we may be holding a
+  // capture the cloud lacks, or honouring a deletion it hasn't heard about.
+  const remoteIds = new Set(idsOf(remote))
+  const mergedIds = idsOf(state)
+  const needsPush = mergedIds.length !== remoteIds.size || mergedIds.some(id => !remoteIds.has(id))
+  const kept = new Set(mergedIds)
+  const dropped = idsOf(local).filter(id => !kept.has(id))
+  return { state, needsPush, dropped }
+}
+
+/**
+ * Keep a copy of the fullest galaxy this device ever held before a merge let
+ * anything go.
+ *
+ * Honouring a deletion and honouring a truncated cloud row are the same
+ * operation from in here — the merge cannot tell a bulk delete apart from
+ * another client having overwritten the row with less than it held. That is
+ * survivable as long as nothing is ever *unrecoverable*, so before a lossy
+ * merge the pre-merge state goes in a one-slot backup. Restore from a console:
+ *
+ *   localStorage.setItem('adhdo-galaxy', JSON.stringify(
+ *     JSON.parse(localStorage.getItem('adhdo-rescue')).state))
+ *   localStorage.removeItem('adhdo-remote-seen')
+ *   localStorage.removeItem('adhdo-remote-base')
+ *
+ * then reload. Clearing the base matters as much as restoring the state: with a
+ * common ancestor in hand the next reconcile would read the cloud's own records
+ * as things this device had deleted and take *those* away instead. Dropping it
+ * puts the merge back on the union fallback, which keeps both sides — the right
+ * way to be wrong when you already know one copy was wrongly emptied.
+ *
+ * Whichever copy holds more records wins the slot, so a second bad merge can't
+ * bury the good one.
+ */
+export function saveRescue(state: GalaxyState) {
+  const size = idsOf(state).length
+  const existing = loadRescue()
+  if (existing && idsOf(existing.state).length >= size) return
+  localStorage.setItem(RESCUE_KEY, JSON.stringify({
+    at: new Date().toISOString(),
+    state: serializeState(state),
+  }))
+}
+
+export function loadRescue(): { at: string; state: GalaxyState } | null {
+  const raw = localStorage.getItem(RESCUE_KEY)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return { at: parsed.at, state: hydrateState(parsed.state) }
+  } catch { /* ignore corrupt data */ }
+  return null
 }
 
 export function hasSeenOnboarding(): boolean {
@@ -296,20 +423,62 @@ export async function saveRemote(
     .select('updated_at')
     .single()
   if (error || !data) return 'error'
-  // Store what the row actually holds now, so the next compare-and-swap matches
-  // like for like (Postgres echoes `+00:00`, not the `Z` we sent).
-  setRemoteSeen(data.updated_at)
+  // The row now holds exactly `state`, so record both the stamp and what it was
+  // made of. The stamp is the one Postgres echoed (`+00:00`), not the `Z` we
+  // sent, so the next compare-and-swap matches like for like.
+  markRemoteSeen(data.updated_at, state)
   return 'saved'
 }
 
 export interface RemoteState {
   state: GalaxyState
   updatedAt: string
-  /** True when this device had never observed the cloud row before this read. */
-  firstSight: boolean
 }
 
-/** Load state from Supabase. Returns null if not logged in or no data. */
+/**
+ * What to do about a cloud row, given what this device holds.
+ *
+ * The whole sync decision, in one pure function and out of the component, for
+ * two reasons: it is the part that broke and it is the part that had no test.
+ * It used to be split between a timestamp comparison in the pull and a
+ * compare-and-swap in the save — which is how the two came to disagree. A phone
+ * that captured a few notes while signed out satisfied both into overwriting
+ * the galaxy: newest clock, and a stamp the read had already marked seen.
+ *
+ *   hold  — `seen` says our copy already contains this version; nothing to do
+ *   adopt — take the cloud copy as-is (we hold nothing, or nothing it lacks)
+ *   merge — fold the two together and write the result back
+ *
+ * `mustPush` is the save path saying it knows it holds unsaved work, so the
+ * result must be written back even if the merge added nothing new.
+ */
+export type SyncPlan =
+  | { action: 'hold' }
+  | { action: 'adopt'; dropped: string[] }
+  | { action: 'merge'; state: GalaxyState; dropped: string[] }
+
+export function planSync(
+  local: GalaxyState,
+  remote: RemoteState,
+  opts: { seen: string | null; base: Set<string> | null; mustPush?: boolean },
+): SyncPlan {
+  if (!opts.mustPush && opts.seen === remote.updatedAt) return { action: 'hold' }
+  // An untouched device has nothing worth merging; just take the cloud copy.
+  if (isEmptyState(local)) return { action: 'adopt', dropped: [] }
+  const { state, needsPush, dropped } = reconcileWithRemote(local, remote.state, opts.base)
+  // `adopt` can shed records too: taking the cloud copy wholesale is how a
+  // deletion made elsewhere reaches this device, so it carries `dropped` as well.
+  if (!needsPush && !opts.mustPush) return { action: 'adopt', dropped }
+  return { action: 'merge', state, dropped }
+}
+
+/**
+ * Load state from Supabase. Returns null if not logged in or no data.
+ *
+ * ⚠️ Reading does NOT mark the version seen. Only the caller knows whether it
+ * actually took the copy in, and `markRemoteSeen` is a promise that this device
+ * holds those thoughts — see `getRemoteSeen` for what it cost to learn that.
+ */
 export async function loadRemote(supabase: SupabaseClient): Promise<RemoteState | null> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
@@ -321,14 +490,9 @@ export async function loadRemote(supabase: SupabaseClient): Promise<RemoteState 
     .maybeSingle()
 
   if (error || !data) return null
-  const firstSight = getRemoteSeen() === null
-  // We've now observed this version, so a later local save is allowed to build
-  // on it — whether or not the caller decides to adopt it.
-  setRemoteSeen(data.updated_at)
   return {
     state: hydrateState(data.state_json),
     updatedAt: data.updated_at,
-    firstSight,
   }
 }
 

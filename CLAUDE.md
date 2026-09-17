@@ -100,13 +100,23 @@ mapped 1:1 onto the shared state so desktop and phone are two windows on one gal
 - **⚠️ Installed on iOS, `height: 100%` lies (fixed 2026-09-17).** In a home-screen web app with `black-translucent` + `viewport-fit=cover`, WebKit lays the page out from y=0 — correctly full-bleed under the Dynamic Island — but sizes the **initial containing block as screen MINUS the status bar**. A shell that can't scroll (`html, body, #root { height: 100%; overflow: hidden }`) is pinned to that short number with no content flow to push past it, so the app's box stopped exactly `safe-area-inset-top` (59px on a 15 Pro) above the screen bottom and the canvas painted the rest in body's `--bg` — the dead strip under the tab bar. Two halves to the fix, and **both are needed**: `@supports (height: 100dvh)` re-sizes `html/body/#root/.app` off the window instead of the ICB, *and* `.mobile-root { transform: translateZ(0) }` makes the app box the containing block for every fixed descendant — because `position: fixed; bottom: 0` obeys the same short ICB, so `dvh` alone would have left the tab bar floating. Sibling repo `traction` never hit this only because it is a normally-flowing scrollable document (`min-height: 100%`, no `overflow: hidden`), which gets a full-height ICB; its head tags are otherwise identical.
 - **Safe areas.** `--safe-t/b/l/r` vars in `:root`; `index.html` has `viewport-fit=cover` + `apple-mobile-web-app-status-bar-style=black-translucent`. Every fixed edge (tab bar, FAB stack, bulk bar, sheets, undo pill) pays them back.
 
-## Sync (rewritten 2026-08-22 — was losing data)
+## Sync (rewritten 2026-08-22, again 2026-09-17 — both times it was losing data)
 
-- **Was broken:** `saveRemote` had no compare-and-swap, and the pull compared timestamps with raw string `>`. Local stamps end in `Z`, Postgres returns `+00:00`, and `'Z' > '+'`, so a same-second cloud copy always looked older and the pull silently never happened. Combined with a fresh device stamping updated-at ~2s after boot (the autosave interval saw `stateSignature(state) !== ''`), **an empty install could flatten the entire cloud galaxy.** Adding the app to an iOS home screen creates exactly such a device — an installed PWA has its own storage sandbox.
-- **Now:** `isNewer()` parses. `saveRemote` does a compare-and-swap against `adhdo-remote-seen` and returns `'saved' | 'stale' | 'error'`. `lastSavedRef` seeds from the loaded state so an untouched device never stamps.
-- On `stale`, `mergeStates()` unions all three collections by id (cloud wins ties, local-only records always survive) then `repairState()`s the result. **No tombstones — an offline delete can resurrect.** Deliberate: a thought you delete twice beats a thought that vanishes.
+- **First break (2026-08-22):** `saveRemote` had no compare-and-swap, and the pull compared timestamps with raw string `>`. Local stamps end in `Z`, Postgres returns `+00:00`, and `'Z' > '+'`, so a same-second cloud copy always looked older and the pull silently never happened. Combined with a fresh device stamping updated-at ~2s after boot (the autosave interval saw `stateSignature(state) !== ''`), **an empty install could flatten the entire cloud galaxy.** Adding the app to an iOS home screen creates exactly such a device — an installed PWA has its own storage sandbox.
+- **Second break (2026-09-17): capture a few thoughts signed out, then sign in, and the galaxy is gone.** Two defects, and it took both:
+  1. `loadRemote` marked the version **seen** on every read — even a read the caller then threw away. `adhdo-remote-seen` is the base of the compare-and-swap, so a discarded read disarmed the one guard against overwriting a copy we don't hold.
+  2. The pull decided by **clock** (`cloudWins` = "is the cloud newer"). Capturing while signed out advances `adhdo-updated-at` without the cloud hearing a word, so the device that has seen the least of the galaxy looks like its freshest writer. The sign-in pull declined to adopt, the screen showed only the new notes, and five seconds later the debounced save walked through the now-disarmed guard and made those notes the whole cloud row.
+- **Now: seen-ness is a promise, and the question is containment, not time.**
+  - `markRemoteSeen(updatedAt, state)` is the only writer of `adhdo-remote-seen`, called from exactly two places — adopting a cloud copy, and a save the cloud accepted. `loadRemote` no longer stamps anything.
+  - It also records `adhdo-remote-base`: the **ids** the cloud copy we hold was made of. That common ancestor is what lets a merge tell "captured here since the last sync" (keep) from "deleted on another device" (let go) — present-here-absent-there, which without it are the same shape.
+  - `planSync(local, remote, {seen, base, mustPush})` is the whole decision, pure and out of the component: `hold` (seen === the row's stamp — we already contain it), `adopt`, or `merge`. Both directions go through it, which is the point: the pull and the save used to answer this question differently and that disagreement is what lost the data.
+  - ⚠️ `seen` is compared with `===` and is **always a verbatim echo of Postgres's `updated_at`**. Never compare it against a locally generated `toISOString()` — that's the `'Z'` vs `'+00:00'` trap from the first break, one layer down.
+- `reconcileWithRemote()` three-way merges by id: in both → the cloud's copy (it's the newer document); here only → keep unless it's in `base`; there only → keep unless it's in `base`. With **no** base (never synced, or storage evicted) it falls back to `mergeStates()`, a plain union — no tombstones, so an offline delete can resurrect. Deliberate: a thought you delete twice beats a thought that vanishes.
 - `repairState()` makes `cluster.globIds` (authoritative, ordered) and `glob.clusterId` agree. Without it a glob claiming a cluster that doesn't list it renders in *neither* the unsorted list nor the cluster — invisible but present. Runs on every hydrate, so it also heals old blobs.
-- Dirty flag persists in localStorage (`adhdo-dirty`) so a save that failed with no signal retries after a reload. One `sync()` entry point — dirty pushes (merging on stale), clean pulls — fired on login, focus, visibilitychange and **`online`**. The old split pull/push effects could race.
+- Dirty flag persists in localStorage (`adhdo-dirty`) so a save that failed with no signal retries after a reload. One `sync()` entry point — dirty pushes (reconciling on stale), clean pulls — fired on login, focus, visibilitychange and **`online`**. The old split pull/push effects could race.
+- **Rescue slot (`adhdo-rescue`).** Honouring a deletion and honouring a truncated cloud row are the same operation from inside a merge — it cannot tell a bulk delete from another client having overwritten the row with less than it held. So it doesn't try: whenever a reconcile is about to let go of records this device held (`Reconciliation.dropped`), the pre-merge state goes to a one-slot backup first, and the copy holding **more** records wins the slot so a second bad merge can't bury the good one. Restoring it is three console lines (in `saveRescue`'s doc comment) — restore the galaxy **and remove `adhdo-remote-seen` + `adhdo-remote-base`**. Clearing the base matters as much as the state: with an ancestor in hand the next reconcile reads the cloud's own records as things this device deleted and takes *those* away instead. Without one it falls back to the union, which keeps both sides.
+- ⚠️ **Nothing signed out ever reaches the cloud, by design** (`setState` only calls `scheduleRemoteSave` `if (user)`), so signing in is always a merge of two histories, never a resume. Treat it as the hard case, not the happy path.
+- ⚠️ Known, unfixed: **undo/redo go through `setStateRaw`, so they never schedule a cloud save.** An undo stays local until the next tracked edit pushes it. Not data loss (the `hold` check keeps a later pull from reverting it), but it is why an undone delete can sit unsynced.
 
 ## ⚠️ One breathing clock, not N animations (2026-08-29)
 
@@ -149,6 +159,17 @@ the autofocused capture bar.
 
 ⚠️ **`stateSignature` ignores x/y/velocity, so a drag alone never reaches
 localStorage.** Assert positions against the DOM (`boundingBox()`), not the saved state.
+
+`node scripts/sync-check.mjs` — 42 assertions on the sync layer. **No browser, no dev
+server, no dependencies**: Node strips the types off `src/store.ts` on import, a Map
+stands in for `localStorage` (one sandbox per simulated device, which is what an
+installed PWA actually is), and a fake `galaxy_states` table hands back Postgres-shaped
+`+00:00` stamps. Covers the compare-and-swap bookkeeping, the `planSync` decision table,
+deletions in both directions with and without a common ancestor, and an end-to-end replay
+of the morning that broke it — capture five notes signed out, sign in, and assert the
+clusters are still there — plus the rescue slot and the restore procedure that gets a
+wrongly-emptied galaxy back. Restore either half of the 2026-09-17 bug and 8 assertions
+fail, including one that prints the screenshot Nic sent: only the five notes.
 
 ⚠️ **Probe the handle gutter by asserting the *flip*, not the absolute state.** Once a
 row is a to-do the checkbox moves into the left gutter, so "double-click the same spot
