@@ -278,7 +278,7 @@ export default function App() {
 
   const refocusInput = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement
-    if (target.closest('.cluster, .glob, .ctx-menu, .trash-toast, .shake-modal, .help-trigger, .search-modal, .new-glob-input, .onboarding-panel, .cluster-tools, .cluster-browser, .agenda-panel')) {
+    if (target.closest('.cluster, .glob, .ctx-menu, .trash-toast, .shake-modal, .help-trigger, .search-modal, .new-glob-input, .spawn-menu, .onboarding-panel, .cluster-tools, .cluster-browser, .agenda-panel')) {
       return
     }
     inputRef.current?.focus()
@@ -377,18 +377,23 @@ export default function App() {
     }))
   }, [setState])
 
-  /** An empty project, born from the mobile Browse tab's "Add project". */
-  const addCluster = useCallback((name: string) => {
+  /**
+   * An empty project. Mobile's Browse tab ("Add project") names it up front and
+   * lets it land anywhere; the desktop canvas passes the spot you right-clicked
+   * and renames in place, so it needs the id back.
+   */
+  const addCluster = useCallback((name: string, at?: { x: number; y: number }) => {
     const trimmed = name.trim()
-    if (!trimmed) return
+    if (!trimmed) return null
     const w = window.innerWidth, h = window.innerHeight
     const cluster = makeCluster(
       trimmed,
-      w * (0.25 + Math.random() * 0.5),
-      h * (0.25 + Math.random() * 0.5),
+      at?.x ?? w * (0.25 + Math.random() * 0.5),
+      at?.y ?? h * (0.25 + Math.random() * 0.5),
       [],
     )
     setState(prev => ({ ...prev, clusters: [...prev.clusters, cluster] }))
+    return cluster.id
   }, [setState])
 
   const deleteGlob = useCallback((id: string) => {
@@ -424,6 +429,33 @@ export default function App() {
       ...prev,
       globs: prev.globs.map(g => g.id === id ? { ...g, isTodo: !g.isTodo, done: false } : g),
     }))
+  }, [setState])
+
+  /**
+   * Desktop's toggle. Out on the canvas a free glob has no checkbox, so
+   * todo-ness is invisible there — you'd flip it on and see nothing change.
+   * Wrap it in its own cluster on the way in, in one undo step, where the
+   * checkbox exists. Mobile deliberately keeps plain toggleTodo: there an
+   * unclustered glob IS the Inbox and already shows a checkbox, so wrapping
+   * would yank the task out of Inbox into a project called "new cluster".
+   */
+  const toggleTodoOnCanvas = useCallback((id: string) => {
+    setState(prev => {
+      const target = prev.globs.find(g => g.id === id)
+      if (!target) return prev
+      if (!target.isTodo && !target.clusterId) {
+        const cluster = makeCluster('new cluster', target.x, target.y, [id])
+        return {
+          ...prev,
+          globs: prev.globs.map(g => g.id === id ? { ...g, isTodo: true, done: false, clusterId: cluster.id } : g),
+          clusters: [...prev.clusters, cluster],
+        }
+      }
+      return {
+        ...prev,
+        globs: prev.globs.map(g => g.id === id ? { ...g, isTodo: !g.isTodo, done: false } : g),
+      }
+    })
   }, [setState])
 
   // Set-all semantics: if any item in the cluster isn't a todo, mark all as todos.
@@ -1063,7 +1095,7 @@ export default function App() {
         onDelete={deleteGlob}
         onUpdateText={updateGlobText}
         onToggleFlag={toggleFlag}
-        onToggleTodo={toggleTodo}
+        onToggleTodo={toggleTodoOnCanvas}
         onSetDueDate={setGlobDueDate}
         onSetPriority={setGlobPriority}
         onToggleAllTodosInCluster={toggleAllTodosInCluster}
@@ -1072,6 +1104,7 @@ export default function App() {
         onDuplicate={duplicateGlob}
         onUpdatePos={updateGlobPos}
         onCreateCluster={createCluster}
+        onAddCluster={addCluster}
         onConvertToCluster={convertToCluster}
         onAddToCluster={addToCluster}
         onMoveGlobToCluster={moveGlobToCluster}

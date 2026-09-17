@@ -33,6 +33,7 @@ interface Props {
   updateGlobs: (fn: (globs: Glob[]) => Glob[]) => void
   updateState: (fn: (s: GalaxyState) => GalaxyState) => void
   onAddGlobAt: (text: string, x: number, y: number) => void
+  onAddCluster: (name: string, at?: { x: number; y: number }) => string | null
   onDelete: (id: string) => void
   onUpdateText: (id: string, text: string) => void
   onToggleFlag: (id: string) => void
@@ -78,7 +79,7 @@ export default function Galaxy({
   showOnboarding,
   onDismissOnboarding,
   state, updateGlobs, updateState,
-  onAddGlobAt, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onSetDueDate, onSetPriority, onToggleAllTodosInCluster,
+  onAddGlobAt, onAddCluster, onDelete, onUpdateText, onToggleFlag, onToggleTodo, onSetDueDate, onSetPriority, onToggleAllTodosInCluster,
   onClearCompletedInCluster, onToggleDone,
   onDuplicate, onUpdatePos,
   onCreateCluster, onConvertToCluster, onAddToCluster, onMoveGlobToCluster, onAddGlobToCluster, onRemoveFromCluster,
@@ -130,6 +131,8 @@ export default function Galaxy({
     onReorderDragOver,
     onReorderDrop,
   } = useClusterReorder({ clusters, onMoveGlobToCluster, onReorderClusterGlobs })
+  /** Right-click on open canvas: pick what to spawn before anything exists. */
+  const [spawnPicker, setSpawnPicker] = useState<{ x: number; y: number } | null>(null)
   const [newGlobPos, setNewGlobPos] = useState<{ x: number; y: number } | null>(null)
   const [trashConfirm, setTrashConfirm] = useState<string | null>(null)
   /** A whole selection dragged onto the trash, pending one confirm for the lot. */
@@ -187,6 +190,7 @@ export default function Galaxy({
     setSchedulePopover(null)
     setPriorityPopover(null)
     setBulkCtx(null)
+    setSpawnPicker(null)
   }, [])
 
   /** Esc: close everything AND drop the selection. */
@@ -277,6 +281,7 @@ export default function Galaxy({
     setClusterCtx(null)
     setDissolveConfirm(null)
     setNewGlobPos(null)
+    setSpawnPicker(null)
   }, [])
 
   const {
@@ -394,7 +399,8 @@ export default function Galaxy({
         setClusterBrowserOpen(false)
         setContextMenu(null)
         setClusterCtx(null)
-        setNewGlobPos({ x: e.clientX, y: e.clientY })
+        setNewGlobPos(null)
+        setSpawnPicker({ x: e.clientX, y: e.clientY })
       }
     }}>
       {/* SVG filter for blobby shapes */}
@@ -488,10 +494,7 @@ export default function Galaxy({
           highlighted={highlightId === g.id}
           selected={selectedIds.has(g.id)}
           onPointerDown={(e, globId) => onPointerDown(e, globId, 'glob')}
-          onConvertToClusterTodo={globId => {
-            onConvertToCluster(globId)
-            onToggleTodo(globId)
-          }}
+          onConvertToClusterTodo={globId => onToggleTodo(globId)}
           onOpenMenu={(e, globId) => openGlobMenu(e, globId, false)}
           onStartEditing={() => setEditingId(g.id)}
           onUpdateText={text => onUpdateText(g.id, text)}
@@ -678,6 +681,7 @@ export default function Galaxy({
         recolorPopover={recolorPopover}
         schedulePopover={schedulePopover}
         priorityPopover={priorityPopover}
+        spawnPicker={spawnPicker}
         newGlobPos={newGlobPos}
         draggingFreeGlob={draggingFreeGlob}
         draggingClusterId={draggingClusterId}
@@ -701,6 +705,7 @@ export default function Galaxy({
         onSetRecolorPopover={setRecolorPopover}
         onSetSchedulePopover={setSchedulePopover}
         onSetPriorityPopover={setPriorityPopover}
+        onSetSpawnPicker={setSpawnPicker}
         onSetNewGlobPos={setNewGlobPos}
         onSetTrashConfirm={setTrashConfirm}
         onSetBulkTrashConfirm={setBulkTrashConfirm}
@@ -738,6 +743,14 @@ export default function Galaxy({
         onDissolveCluster={onDissolveCluster}
         onTransferToNewCluster={onTransferToNewCluster}
         onAddGlobAt={onAddGlobAt}
+        onSpawnClusterAt={(x, y) => {
+          // Land it in rename mode: an empty cluster called "new cluster" is a
+          // placeholder, and naming is the whole reason you reached for one.
+          const id = onAddCluster('new cluster', { x, y })
+          if (!id) return
+          setFocusedClusterId(id)
+          setEditingClusterId(id)
+        }}
         onMergeClusters={onMergeClusters}
         onClearAll={onClearAll}
         onExportJSON={onExportJSON}

@@ -167,6 +167,44 @@ export function NewClusterPromptModal({
   )
 }
 
+/**
+ * Right-clicking open canvas used to jump straight to a new thought, which
+ * quietly made "glob" the only thing the canvas could spawn. This bar asks
+ * first, so a cluster is one click away instead of glob-then-convert.
+ */
+export function CanvasSpawnMenu({
+  x,
+  y,
+  menuRef,
+  onPickGlob,
+  onPickCluster,
+}: {
+  x: number
+  y: number
+  menuRef: (element: HTMLDivElement | null) => void
+  onPickGlob: () => void
+  onPickCluster: () => void
+}) {
+  return (
+    <div
+      ref={menuRef}
+      className="spawn-menu"
+      style={{ left: x, top: y }}
+      onClick={e => e.stopPropagation()}
+      onContextMenu={e => e.preventDefault()}
+    >
+      <button onClick={onPickGlob}>
+        <span className="spawn-menu-icon">🫧</span>
+        glob
+      </button>
+      <button onClick={onPickCluster}>
+        <span className="spawn-menu-icon">📦</span>
+        cluster
+      </button>
+    </div>
+  )
+}
+
 export function NewGlobInput({
   x,
   y,
@@ -734,7 +772,7 @@ export function OnboardingLayer({
       </div>
 
       <div className="onboarding-hint onboarding-hint-context" aria-hidden="true">
-        Bonus: right-click empty space to place a thought exactly where you want it.
+        Bonus: right-click empty space to drop a glob or a cluster exactly where you want it.
       </div>
     </>
   )
@@ -1686,7 +1724,7 @@ export function HelpPanel({
           <div className="help-title">tips & shortcuts</div>
           <div className="help-items">
             <div className="help-item"><kbd>Enter</kbd> in capture bar to launch a glob</div>
-            <div className="help-item"><span className="help-action">Right-click</span> empty space to create a glob</div>
+            <div className="help-item"><span className="help-action">Right-click</span> empty space for a glob or cluster</div>
             <div className="help-item"><span className="help-action">Drag</span> a glob onto another to create a cluster</div>
             <div className="help-item"><span className="help-action">Drag</span> a glob onto a cluster to add it</div>
             <div className="help-item"><span className="help-action">Double-click</span> a glob to edit its text</div>
@@ -1787,6 +1825,7 @@ export function GalaxyOverlays({
   recolorPopover,
   schedulePopover,
   priorityPopover,
+  spawnPicker,
   newGlobPos,
   draggingFreeGlob,
   draggingClusterId,
@@ -1810,6 +1849,7 @@ export function GalaxyOverlays({
   onSetRecolorPopover,
   onSetSchedulePopover,
   onSetPriorityPopover,
+  onSetSpawnPicker,
   onSetNewGlobPos,
   onSetTrashConfirm,
   onSetBulkTrashConfirm,
@@ -1847,6 +1887,7 @@ export function GalaxyOverlays({
   onDissolveCluster,
   onTransferToNewCluster,
   onAddGlobAt,
+  onSpawnClusterAt,
   onMergeClusters,
   onClearAll,
   onExportJSON,
@@ -1864,6 +1905,7 @@ export function GalaxyOverlays({
   recolorPopover: { x: number; y: number; target: RecolorTarget } | null
   schedulePopover: { x: number; y: number; globId: string } | null
   priorityPopover: { x: number; y: number; globId: string } | null
+  spawnPicker: { x: number; y: number } | null
   newGlobPos: { x: number; y: number } | null
   draggingFreeGlob: boolean
   draggingClusterId: string | null
@@ -1887,6 +1929,7 @@ export function GalaxyOverlays({
   onSetRecolorPopover: (value: { x: number; y: number; target: RecolorTarget } | null) => void
   onSetSchedulePopover: (value: { x: number; y: number; globId: string } | null) => void
   onSetPriorityPopover: (value: { x: number; y: number; globId: string } | null) => void
+  onSetSpawnPicker: (value: { x: number; y: number } | null) => void
   onSetNewGlobPos: (value: { x: number; y: number } | null) => void
   onSetTrashConfirm: (value: string | null) => void
   onSetBulkTrashConfirm: (value: string[] | null) => void
@@ -1924,6 +1967,7 @@ export function GalaxyOverlays({
   onDissolveCluster: (id: string) => void
   onTransferToNewCluster: (ids: string[], name?: string) => void
   onAddGlobAt: (text: string, x: number, y: number) => void
+  onSpawnClusterAt: (x: number, y: number) => void
   onMergeClusters: (c1Id: string, c2Id: string, newName: string) => void
   onClearAll: () => void
   onExportJSON: () => void
@@ -2098,6 +2142,22 @@ export function GalaxyOverlays({
           />
         )
       })()}
+
+      {spawnPicker && (
+        <CanvasSpawnMenu
+          x={spawnPicker.x}
+          y={spawnPicker.y}
+          menuRef={clampMenuToViewport}
+          onPickGlob={() => {
+            onSetNewGlobPos({ x: spawnPicker.x, y: spawnPicker.y })
+            onSetSpawnPicker(null)
+          }}
+          onPickCluster={() => {
+            onSpawnClusterAt(spawnPicker.x, spawnPicker.y)
+            onSetSpawnPicker(null)
+          }}
+        />
+      )}
 
       {newGlobPos && (
         <NewGlobInput

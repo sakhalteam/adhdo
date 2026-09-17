@@ -275,6 +275,23 @@ const closeSheet = async page => {
     s.clusters.some(c => c.name === 'reading list')
     && await page.locator('.mobile-browse-row', { hasText: 'reading list' }).isVisible())
 
+  // 13. Making an Inbox thought a to-do keeps it in the Inbox. Desktop wraps a
+  // free glob in a cluster (it has no checkbox out there); the phone must not,
+  // or every Inbox to-do would get filed into a project called "new cluster".
+  const clustersBeforeTodo = s.clusters.length
+  await page.locator('.mobile-browse-row', { hasText: 'Inbox' }).click()
+  await page.waitForTimeout(300)
+  await page.locator('.mobile-task', { hasText: 'call the arborist' }).click()
+  await page.waitForTimeout(350)
+  await page.locator('.mobile-detail-row', { hasText: 'Make a to-do' }).click()
+  await page.waitForTimeout(200)
+  await closeSheet(page)
+  s = await readState(page)
+  const arborist = s.globs.find(g => g.id === 'g1')
+  check('Making an Inbox thought a to-do keeps it in the Inbox',
+    arborist?.isTodo === true && arborist?.clusterId === null
+    && s.clusters.length === clustersBeforeTodo)
+
   check('No console errors (mobile)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()
 }
@@ -349,6 +366,52 @@ const closeSheet = async page => {
   await page.keyboard.press('Escape')
   await page.waitForTimeout(300)
   check('Esc closes the dock', (await page.locator('.agenda-panel').count()) === 0)
+
+  // ── right-click on open canvas asks glob-or-cluster first ──
+  // Physics keeps things drifting, so find a point that is really bare galaxy.
+  const bare = await page.evaluate(() => {
+    for (const [x, y] of [[1000, 650], [1120, 180], [160, 650], [620, 120], [1000, 300]]) {
+      if (document.elementFromPoint(x, y)?.classList.contains('galaxy')) return { x, y }
+    }
+    return null
+  })
+  check('Found bare canvas to right-click', !!bare)
+  await page.mouse.click(bare.x, bare.y, { button: 'right' })
+  await page.waitForTimeout(250)
+  check('Right-click on empty space opens the glob/cluster picker',
+    await page.locator('.spawn-menu button', { hasText: 'glob' }).isVisible()
+    && await page.locator('.spawn-menu button', { hasText: 'cluster' }).isVisible())
+  await page.locator('.spawn-menu button', { hasText: 'cluster' }).click()
+  await page.waitForTimeout(300)
+  check('"cluster" spawns one straight into rename mode',
+    await page.evaluate(() => document.activeElement?.classList.contains('cluster-name-edit')))
+  await page.keyboard.type('garage')
+  await page.keyboard.press('Enter')
+  let d = await readState(page)
+  check('...and it is a named, empty cluster',
+    d.clusters.some(c => c.name === 'garage' && c.globIds.length === 0))
+
+  // ── a free glob made a to-do gets its own cluster, so the checkbox exists ──
+  const clustersBeforeWrap = d.clusters.length
+  // Dispatched rather than clicked: the glob drifts under the physics loop and
+  // can pass beneath a cluster card, so a coordinate right-click is a coin flip.
+  // This still runs the glob's own onContextMenu → openGlobMenu path.
+  const pwGlob = page.locator('.glob', { hasText: 'pressure-wash' })
+  const pw = await pwGlob.boundingBox()
+  await pwGlob.dispatchEvent('contextmenu', {
+    button: 2, clientX: pw.x + pw.width / 2, clientY: pw.y + pw.height / 2,
+  })
+  await page.waitForTimeout(300)
+  await page.locator('.ctx-menu button', { hasText: 'Make todo' }).click()
+  await page.waitForTimeout(400)
+  d = await readState(page)
+  const wrapped = d.globs.find(g => g.id === 'g2')
+  check('Make todo on a free glob wraps it in a one-member cluster',
+    wrapped?.isTodo === true && !!wrapped?.clusterId
+    && d.clusters.length === clustersBeforeWrap + 1
+    && d.clusters.find(c => c.id === wrapped.clusterId)?.globIds.join() === 'g2')
+  check('...where its checkbox is actually visible',
+    await page.locator('.cluster-glob-item', { hasText: 'pressure-wash' }).locator('.todo-check').isVisible())
 
   check('No console errors (desktop)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()

@@ -324,9 +324,15 @@ const grabPoint = async page => {
   const card = await page.locator('.cluster[data-cluster-id="c1"]').boundingBox()
   check('A cluster still drags', Math.abs(card.x + card.width / 2 - 1000) > 50)
 
+  // Right-click on open canvas now asks glob-or-cluster first; the route to a
+  // new thought is one click longer but must still reach the canvas.
   await page.mouse.click(300, 760, { button: 'right' })
   await page.waitForTimeout(200)
-  check('Right-click empty space still offers a new thought',
+  check('Right-click empty space opens the spawn picker',
+    await page.locator('.spawn-menu').isVisible())
+  await page.locator('.spawn-menu button', { hasText: 'glob' }).click()
+  await page.waitForTimeout(200)
+  check('...and "glob" still offers a new thought',
     await page.locator('.new-glob-input input').isVisible())
   check('No console errors (modeless routing)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()

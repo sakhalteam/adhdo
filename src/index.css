@@ -1153,6 +1153,42 @@ body {
   box-shadow: 0 0 0 3px var(--ring), 0 8px 32px rgba(0,0,0,0.4);
 }
 
+/* ── canvas spawn picker ────────────────── */
+.spawn-menu {
+  position: fixed;
+  z-index: 300;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(20, 20, 40, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-bright);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  animation: fadeScale 0.12s ease-out;
+}
+.spawn-menu button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.12s;
+}
+.spawn-menu button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  transform: translateY(-1px);
+}
+.spawn-menu button:active { transform: translateY(0); }
+.spawn-menu-icon { font-size: 15px; line-height: 1; }
+
 /* ── trash zone ─────────────────────────────────────── */
 .trash-zone {
   position: fixed;
