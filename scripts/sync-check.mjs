@@ -33,6 +33,7 @@ useDevice('laptop')
 const {
   saveLocal, loadLocal, saveRemote, loadRemote, getRemoteSeen, getRemoteBase,
   markRemoteSeen, saveRescue, loadRescue, planSync, reconcileWithRemote, repairState,
+  shouldArchive, listVersions, loadVersion, exportPayload, parseImport, mergeStates,
 } = await import('../src/store.ts')
 
 // ── a fake galaxy_states table ──────────────────────────────────────────────
@@ -41,10 +42,32 @@ const {
 let clock = Date.parse('2026-09-17T09:00:00Z')
 const pgStamp = () => new Date((clock += 60_000)).toISOString().replace('Z', '+00:00')
 
-const makeCloud = () => ({ row: null, writes: 0 })
+const makeCloud = () => ({ row: null, writes: 0, versions: [] })
+
+/** Both tables: galaxy_states (one row, upserted) and galaxy_versions (append + prune). */
 const makeClient = cloud => ({
   auth: { getUser: async () => ({ data: { user: { id: 'nic' } } }) },
-  from() {
+  from(table) {
+    if (table === 'galaxy_versions') {
+      const q = {
+        _filters: {},
+        select() { return q },
+        eq(col, val) { q._filters[col] = val; return q },
+        order() { return q },
+        async insert(row) {
+          cloud.versions.unshift({ id: `v${cloud.versions.length + 1}`, created_at: pgStamp(), ...row })
+          // The pruning trigger, in miniature.
+          cloud.versions = cloud.versions.slice(0, 20)
+          return { data: null, error: null }
+        },
+        async maybeSingle() {
+          const hit = cloud.versions.find(v => v.id === q._filters.id)
+          return { data: hit ? { ...hit } : null, error: null }
+        },
+        then(resolve) { return Promise.resolve({ data: cloud.versions.map(v => ({ ...v })), error: null }).then(resolve) },
+      }
+      return q
+    }
     const q = {
       _upsert: null,
       select() { return q },
@@ -322,6 +345,78 @@ console.log('\nrescue slot')
     NOTES.every((_, i) => has(desktop, `n${i + 1}`)))
   check('...and the cloud holds all of it',
     cloud.row.state_json.clusters.length === 2 && cloud.row.state_json.globs.length === 9)
+}
+
+// ── 6. version history: the previous save actually survives ─────────────────
+console.log('\nversion history')
+{
+  const HOUR = 3_600_000
+  const base = new Set(ids(galaxy()))
+  const smaller = { globs: galaxy().globs.slice(0, 2), clusters: [], connections: [] }
+
+  check('a write that shrinks the galaxy always archives first',
+    shouldArchive(smaller, base, new Date().toISOString()) === true)
+  check('an ordinary write soon after the last snapshot does not',
+    shouldArchive(galaxy(), base, new Date().toISOString()) === false)
+  check('...but one six hours later does',
+    shouldArchive(galaxy(), base, new Date(Date.now() - 7 * HOUR).toISOString()) === true)
+  check('a device that has never archived does so on its first save',
+    shouldArchive(galaxy(), base, null) === true)
+  check('growth alone is not a reason to snapshot',
+    shouldArchive({ ...galaxy(), globs: [...galaxy().globs, glob('gX', 'one more')] },
+      base, new Date().toISOString()) === false)
+
+  // End to end: the overwrite that started all this, with history switched on.
+  const cloud = makeCloud()
+  const client = makeClient(cloud)
+
+  useDevice('hist-desktop')
+  await devicePush(client, galaxy())
+
+  useDevice('hist-phone')
+  await deviceSync(client, empty())            // adopt, so base = the full galaxy
+  await saveRemote(client, notesState(), { force: true })
+  check('the galaxy row has been replaced by the five notes',
+    cloud.row.state_json.globs.length === 5)
+
+  const history = await listVersions(client)
+  check('...and the previous save is in the history',
+    history.length === 1 && history[0].globCount === 4 && history[0].clusterCount === 2)
+  const recovered = await loadVersion(client, history[0].id)
+  check('...and loads back as the galaxy it was',
+    has(recovered, 'c1') && has(recovered, 'c2') && has(recovered, 'g1'))
+
+  // A restore usually GROWS the galaxy, so it trips none of the heuristics —
+  // which is why the restore path asks for the snapshot explicitly.
+  check('a restore would not trip the shrink or cadence rules on its own',
+    shouldArchive(recovered, getRemoteBase(), new Date().toISOString()) === false)
+  await saveRemote(client, recovered, { force: true, archive: true })
+  const after = await listVersions(client)
+  check('restoring archives what it replaced, so it can be undone',
+    after.length === 2 && after[0].globCount === 5)
+  check('...and the cloud holds the galaxy again',
+    cloud.row.state_json.clusters.length === 2)
+}
+
+// ── 7. export / import ──────────────────────────────────────────────────────
+console.log('\nexport and import')
+{
+  const file = exportPayload(galaxy())
+  const back = parseImport(file)
+  check('an exported galaxy parses back whole',
+    back !== null && ids(back).join() === ids(galaxy()).join())
+  check('a bare galaxy blob (copied out of a console) parses too',
+    ids(parseImport(JSON.stringify(galaxy()))).join() === ids(galaxy()).join())
+  check('a file missing connections still parses',
+    parseImport(JSON.stringify({ globs: [], clusters: [] })) !== null)
+  check('junk is rejected rather than half-applied',
+    parseImport('not json') === null && parseImport('{"nope":1}') === null)
+
+  // Import merges. It used to replace, which made the recovery tool one more
+  // way to lose the thoughts you captured since the file was written.
+  const merged = mergeStates(notesState(), parseImport(file))
+  check('importing adds the file without removing what you have',
+    has(merged, 'c1') && has(merged, 'g1') && NOTES.every((_, i) => has(merged, `n${i + 1}`)))
 }
 
 const failed = results.filter(r => !r.ok)

@@ -6,6 +6,8 @@
  * is the galaxy plus the due-date/priority reflection.
  */
 import { chromium } from 'playwright-core'
+import fs from 'node:fs'
+import os from 'node:os'
 
 // Vite picks the next free port if 5173 is taken; override with PORT=5174.
 const URL = `http://localhost:${process.env.PORT ?? 5173}/adhdo/`
@@ -292,6 +294,36 @@ const closeSheet = async page => {
     arborist?.isTodo === true && arborist?.clusterId === null
     && s.clusters.length === clustersBeforeTodo)
 
+  // Backups reachable from the phone — the point of putting the panel in
+  // shared chrome is that the device to hand is the one that has it.
+  await page.locator('.mobile-tab', { hasText: 'Browse' }).click()
+  await page.waitForTimeout(300)
+  await page.locator('.mobile-browse-row', { hasText: 'Backups' }).click()
+  await page.waitForTimeout(300)
+  check('Browse opens the backups panel on mobile',
+    await page.locator('.backups-panel').isVisible())
+  check('...which offers the export file when signed out',
+    await page.locator('.backups-btn', { hasText: 'export' }).isVisible())
+  check('...and says version history needs a sign-in',
+    (await page.locator('.backups-note').first().textContent() ?? '').length > 0
+    && await page.locator('.backups-note', { hasText: 'Sign in' }).isVisible())
+
+  // Import merges: seed a file holding one thought this galaxy has never seen.
+  const importPath = `${os.tmpdir()}/adhdo-import-test.json`
+  fs.writeFileSync(importPath, JSON.stringify({
+    version: 1,
+    state: { globs: [glob('imported from a file', { id: 'imp1' })], clusters: [], connections: [] },
+  }))
+  await page.locator('.backups-panel input[type=file]').setInputFiles(importPath)
+  await page.waitForTimeout(400)
+  const afterImport = await readState(page)
+  check('Import merges the file in rather than replacing the galaxy',
+    afterImport.globs.some(g => g.id === 'imp1')
+    && afterImport.globs.some(g => g.id === 'g1')
+    && afterImport.clusters.some(c => c.id === 'c1'),
+    `globs ${afterImport.globs.length}, imp1 ${afterImport.globs.some(g => g.id === 'imp1')}`)
+  fs.rmSync(importPath, { force: true })
+
   check('No console errors (mobile)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()
 }
@@ -412,6 +444,18 @@ const closeSheet = async page => {
     && d.clusters.find(c => c.id === wrapped.clusterId)?.globIds.join() === 'g2')
   check('...where its checkbox is actually visible',
     await page.locator('.cluster-glob-item', { hasText: 'pressure-wash' }).locator('.todo-check').isVisible())
+
+  // Same panel, reached through the `?` panel's backup section.
+  await page.locator('.help-trigger').click()
+  await page.waitForTimeout(250)
+  await page.locator('.help-action-btn', { hasText: 'version history' }).click()
+  await page.waitForTimeout(300)
+  check('The desktop help panel opens the same backups panel',
+    await page.locator('.backups-panel').isVisible())
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(250)
+  check('...and Esc closes it',
+    await page.locator('.backups-panel').count() === 0)
 
   check('No console errors (desktop)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()

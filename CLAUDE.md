@@ -118,6 +118,20 @@ mapped 1:1 onto the shared state so desktop and phone are two windows on one gal
 - ⚠️ **Nothing signed out ever reaches the cloud, by design** (`setState` only calls `scheduleRemoteSave` `if (user)`), so signing in is always a merge of two histories, never a resume. Treat it as the hard case, not the happy path.
 - ⚠️ Known, unfixed: **undo/redo go through `setStateRaw`, so they never schedule a cloud save.** An undo stays local until the next tracked edit pushes it. Not data loss (the `hold` check keeps a later pull from reverting it), but it is why an undone delete can sit unsynced.
 
+## Backups (2026-09-17) — three layers, because one document is easy to lose
+
+`galaxy_states` is one row per user and every save is an UPSERT, so until now the previous document died the instant the next one landed: when a bad write happened there was nothing to roll back to. **That was an adhdo gap, not a Supabase one** — and Supabase's own backups don't fill it: Free-plan projects get no automatic daily backups at all, and Pro's are a whole-project restore to a point up to 24h stale (PITR, the only thing with the right granularity, is a paid add-on). The `supabase-keepalive` workflow is the tell that this project is on Free.
+
+1. **Version history (`galaxy_versions`).** ⚠️ **Needs one-time setup: run `supabase/galaxy_versions.sql` in the Supabase SQL editor.** There are no migrations in this repo — the schema was made by hand in the dashboard, so new tables are a manual step and the panel says so when the list is empty.
+   - `saveRemote` archives **the row it is about to replace** — before the upsert, never after, since afterwards there is nothing left to copy. So a version really is "the previous save", not a copy of whatever the saving device happened to hold.
+   - `shouldArchive` (pure, tested) decides: **any write that shrinks the galaxy** (the shape of every data loss this app has had — compared against `getRemoteBase()`, not our own previous state, or a device arriving with less than the cloud would slip through), else a 6-hourly cadence. ⚠️ Growth doesn't trip it, which is why **a restore passes `archive: true` explicitly** — a rollback you can't roll back is not a safety net.
+   - Best-effort throughout: failing to keep a backup must never cost you the save.
+   - A Postgres trigger prunes to the newest 20 per user. In the database so a client that dies mid-save can't leave history unbounded. No UPDATE policy on the table — history is not editable in place.
+2. **Export / import.** ⚠️ **Import MERGES, it does not replace.** It used to `setState(() => incoming)`, which made the recovery tool one more way to lose everything — pick a stale file and the thoughts you captured since are gone. `parseImport` also accepts a bare galaxy blob, because the thing you reach for in a panic is often localStorage copied out of a console.
+3. **Rescue slot** — see the sync section above.
+
+**`BackupsPanel` lives in AppChrome.tsx** (shared chrome), not in Galaxy or MobileApp: "where are my backups" must not mean two different things on two devices, and the day you need it is the day you're on whichever device is to hand. Desktop reaches it from the `?` panel's backup section, mobile from a Browse row. Its own `backups-` class namespace, so it collides with neither the galaxy's classes nor the phone's.
+
 ## ⚠️ One breathing clock, not N animations (2026-08-29)
 
 Selected things pulse off a single animated custom property, **not** a per-element
@@ -160,7 +174,7 @@ the autofocused capture bar.
 ⚠️ **`stateSignature` ignores x/y/velocity, so a drag alone never reaches
 localStorage.** Assert positions against the DOM (`boundingBox()`), not the saved state.
 
-`node scripts/sync-check.mjs` — 42 assertions on the sync layer. **No browser, no dev
+`node scripts/sync-check.mjs` — 58 assertions on the sync and backup layers. **No browser, no dev
 server, no dependencies**: Node strips the types off `src/store.ts` on import, a Map
 stands in for `localStorage` (one sandbox per simulated device, which is what an
 installed PWA actually is), and a fake `galaxy_states` table hands back Postgres-shaped
@@ -168,14 +182,23 @@ installed PWA actually is), and a fake `galaxy_states` table hands back Postgres
 deletions in both directions with and without a common ancestor, and an end-to-end replay
 of the morning that broke it — capture five notes signed out, sign in, and assert the
 clusters are still there — plus the rescue slot and the restore procedure that gets a
-wrongly-emptied galaxy back. Restore either half of the 2026-09-17 bug and 8 assertions
+wrongly-emptied galaxy back, the `shouldArchive` policy, a version-history round trip
+(overwrite the galaxy, find the previous save in the list, load it back), and the
+export/import round trip. Restore either half of the 2026-09-17 sync bug and 8 assertions
 fail, including one that prints the screenshot Nic sent: only the five notes.
+
+The fake Supabase client serves **both** tables — `galaxy_states` (one row, upserted) and
+`galaxy_versions` (append + a miniature of the pruning trigger). Its `galaxy_versions`
+query object is thenable, because `listVersions` awaits the builder itself rather than
+calling `.maybeSingle()`.
 
 ⚠️ **Probe the handle gutter by asserting the *flip*, not the absolute state.** Once a
 row is a to-do the checkbox moves into the left gutter, so "double-click the same spot
 again" is not a valid way to reset between probes — the right square always is.
 
-`node scripts/smoke.mjs` — 59 end-to-end assertions across both layouts: Today/Upcoming/Browse tabs, tab badge, quick-add NL parsing ("tomorrow p1" lifts out), checkbox + swipe-right complete, swipe-left schedule, scroll-doesn't-swipe, detail-sheet priority, project drill-in + Completed fold, long-press select, bulk move, single-undo-per-batch, search/filters, state repair, add-project, an Inbox to-do staying in the Inbox — then desktop: galaxy intact, due chips on rows and globs, priority-tinted todo-checks, the context-menu Schedule popover writing state, and the agenda dock (badge count, overdue/today split, a context-menu-scheduled task appearing in it, undated thoughts staying out, surviving a galaxy click, tick-to-complete, click-to-fly, Esc to close), the right-click glob/cluster picker (cluster lands in rename mode), and Make todo wrapping a free glob in a one-member cluster. Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`, or set `BROWSER_PATH=/path/to/chromium` (works for group-drag-check too). Both scripts need the dev server up, which needs Supabase env vars — a dummy `.env.local` (any URL/key) is enough for local runs.
+`node scripts/smoke.mjs` — 65 end-to-end assertions across both layouts: Today/Upcoming/Browse tabs, tab badge, quick-add NL parsing ("tomorrow p1" lifts out), checkbox + swipe-right complete, swipe-left schedule, scroll-doesn't-swipe, detail-sheet priority, project drill-in + Completed fold, long-press select, bulk move, single-undo-per-batch, search/filters, state repair, add-project, an Inbox to-do staying in the Inbox — then desktop: galaxy intact, due chips on rows and globs, priority-tinted todo-checks, the context-menu Schedule popover writing state, and the agenda dock (badge count, overdue/today split, a context-menu-scheduled task appearing in it, undated thoughts staying out, surviving a galaxy click, tick-to-complete, click-to-fly, Esc to close), the right-click glob/cluster picker (cluster lands in rename mode), and Make todo wrapping a free glob in a one-member cluster, plus the backups panel from both
+layouts (Browse row on mobile, `?` → version history on desktop, Esc to close) and an
+import proving it merges rather than replaces. Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`, or set `BROWSER_PATH=/path/to/chromium` (works for group-drag-check too). Both scripts need the dev server up, which needs Supabase env vars — a dummy `.env.local` (any URL/key) is enough for local runs.
 
 Two gotchas when writing harnesses for this app:
 1. **Seed localStorage with `context.addInitScript`, never "goto → set → reload".** adhdo saves on `beforeunload`, so the reload writes the empty state it booted with straight over your seed.
@@ -191,6 +214,6 @@ Two gotchas when writing harnesses for this app:
 ## Pending work
 
 - Auto-cluster orphan globs (~1 week old) into gentle "lost thoughts" cluster
-- Search/filter on **desktop** beyond Cmd+K (mobile now has search + filter chips); keyboard shortcuts, export/import
+- Search/filter on **desktop** beyond Cmd+K (mobile now has search + filter chips); keyboard shortcuts. (Export/import is **done** — see Backups above.)
 - **Hyper-clusters** (deferred — own session): nested clusters-of-clusters with collapsible per-source headers, draggable back out to restore originals. Today's hold-to-merge uses simple absorb (target wins). Would need a new data shape (parentClusterId on Cluster, or a HyperCluster type), nested render/drag/persistence migration.
 - **Galaxies: one hierarchy level above clusters** (Nic's ask, 2026-09-16 — deferred to its own session, overlaps with hyper-clusters above). Hierarchy becomes galaxies ≫ clusters ≫ globs; a Todoist analogy would be workspaces/folders ≫ projects ≫ tasks. Nic also floated going deeper — universe ≫ galaxy ≫ solar system ≫ planet ≫ biome — so if this gets built, design the data shape as arbitrary-depth nesting (a `parentId` on a generalized container type) rather than hard-coding one extra level, and let the UI decide how many levels to expose. Mobile Browse is naturally ready for it (folders above projects); desktop needs a zoom/level metaphor (the cluster browser or useClusterFocus zoom could become "enter a galaxy").

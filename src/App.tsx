@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { loadLocal, saveLocal, saveRemote, loadRemote, touchLocal, getRemoteSeen, getRemoteBase, markRemoteSeen, saveRescue, isDirty, setDirty, planSync, hasSeenOnboarding, markOnboardingSeen, stateSignature, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
-import type { RemoteState } from './store'
+import { loadLocal, saveLocal, saveRemote, loadRemote, touchLocal, getRemoteSeen, getRemoteBase, markRemoteSeen, saveRescue, isDirty, setDirty, planSync, listVersions, loadVersion, exportPayload, parseImport, mergeStates, hasSeenOnboarding, markOnboardingSeen, stateSignature, makeGlob, makeCluster, makeConnection, genId, randomColor } from './store'
+import type { RemoteState, GalaxyVersion } from './store'
 import { supabase } from './supabaseClient'
 import type { GalaxyState, Glob, Cluster, Priority } from './types'
 import type { User } from '@supabase/supabase-js'
 import Galaxy from './Galaxy'
 import MobileApp from './MobileApp'
 import { useIsMobile } from './useIsMobile'
-import { AuthButton, CaptureBar, CloudIndicator, HomeButton, SaveIndicator, UndoRedoBar, VoiceOverlay } from './AppChrome'
+import { AuthButton, BackupsPanel, CaptureBar, CloudIndicator, HomeButton, SaveIndicator, UndoRedoBar, VoiceOverlay } from './AppChrome'
 import { useVoiceCapture } from './useVoiceCapture'
 
 const MAX_UNDO = 40
@@ -24,6 +24,9 @@ export default function App() {
   const [showSaved, setShowSaved] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'merged' | 'pulled' | 'error'>('idle')
+  const [backupsOpen, setBackupsOpen] = useState(false)
+  const [versions, setVersions] = useState<GalaxyVersion[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
 
   // Always-current state for callbacks that fire outside React's render cycle
   // (sync timers, focus/online listeners).
@@ -910,12 +913,7 @@ export default function App() {
   }, [setState])
 
   const exportJSON = useCallback(() => {
-    const payload = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      state,
-    }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const blob = new Blob([exportPayload(stateRef.current)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -924,32 +922,70 @@ export default function App() {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-  }, [state])
+  }, [])
 
+  /**
+   * Import **merges**; it never replaces.
+   *
+   * It used to `setState(() => incoming)`, which makes the recovery tool one
+   * more way to lose everything: pick the wrong file, or a stale one, and the
+   * thoughts you captured since are gone. Union instead — the file wins ties,
+   * because restoring is the whole point — and nothing on either side is lost.
+   * One undo step, so a mistaken import is `Ctrl+Z`.
+   */
   const importJSON = useCallback((file: File) => {
     const reader = new FileReader()
     reader.onload = () => {
-      try {
-        const parsed = JSON.parse(String(reader.result))
-        const incoming: unknown = parsed?.state ?? parsed
-        if (
-          !incoming ||
-          typeof incoming !== 'object' ||
-          !Array.isArray((incoming as GalaxyState).globs) ||
-          !Array.isArray((incoming as GalaxyState).clusters) ||
-          !Array.isArray((incoming as GalaxyState).connections)
-        ) {
-          alert('Invalid backup file — missing globs/clusters/connections.')
-          return
-        }
-        finishOnboarding()
-        setState(() => incoming as GalaxyState)
-      } catch {
-        alert('Could not parse backup file.')
+      const incoming = parseImport(String(reader.result))
+      if (!incoming) {
+        alert('That does not look like an adhdo backup — no globs/clusters in it.')
+        return
       }
+      finishOnboarding()
+      setState(prev => mergeStates(prev, incoming))
+      setBackupsOpen(false)
     }
     reader.readAsText(file)
   }, [finishOnboarding, setState])
+
+  const refreshVersions = useCallback(async () => {
+    if (!user) { setVersions([]); return }
+    setVersionsLoading(true)
+    setVersions(await listVersions(supabase))
+    setVersionsLoading(false)
+  }, [user])
+
+  const openBackups = useCallback(() => {
+    setBackupsOpen(true)
+    void refreshVersions()
+  }, [refreshVersions])
+
+  /**
+   * Roll the galaxy back to an archived version.
+   *
+   * Reversible on both sides, which is what makes it safe to offer at all: the
+   * copy being left goes to the rescue slot, `setState` puts it on the undo
+   * stack, and the forced save archives the cloud row it replaces — so the
+   * state you restored *away* from becomes the newest version in the list.
+   */
+  const restoreVersion = useCallback(async (id: string) => {
+    const restored = await loadVersion(supabase, id)
+    if (!restored) { flash('error'); return }
+    saveRescue(stateRef.current)
+    finishOnboarding()
+    setState(() => restored)
+    setBackupsOpen(false)
+    if (!user) return
+    setCloudStatus('saving')
+    // `archive` is not optional here: a restore usually *grows* the galaxy, so
+    // it trips none of the usual snapshot heuristics — and a rollback you
+    // cannot roll back is not a safety net.
+    const ok = (await saveRemote(supabase, restored, { force: true, archive: true })) === 'saved'
+    needsRemoteSave.current = !ok
+    setDirty(!ok)
+    flash(ok ? 'saved' : 'error')
+    void refreshVersions()
+  }, [finishOnboarding, flash, refreshVersions, setState, user])
 
   const mergeClusters = useCallback((c1Id: string, c2Id: string, newName: string) => {
     setState(prev => {
@@ -1091,6 +1127,17 @@ export default function App() {
           onToggleFlagGlobs={toggleFlagGlobs}
           onToggleAllTodosInGlobs={toggleAllTodosInGlobs}
           onDeleteGlobs={deleteGlobs}
+          onOpenBackups={openBackups}
+        />
+        <BackupsPanel
+          open={backupsOpen}
+          user={user}
+          versions={versions}
+          loading={versionsLoading}
+          onClose={() => setBackupsOpen(false)}
+          onExport={exportJSON}
+          onImport={importJSON}
+          onRestore={restoreVersion}
         />
         <AuthButton user={user} onLogin={login} onLogout={logout} />
         <SaveIndicator visible={showSaved} />
@@ -1151,6 +1198,18 @@ export default function App() {
         onClearAll={clearAll}
         onExportJSON={exportJSON}
         onImportJSON={importJSON}
+        onOpenBackups={openBackups}
+      />
+
+      <BackupsPanel
+          open={backupsOpen}
+          user={user}
+          versions={versions}
+          loading={versionsLoading}
+          onClose={() => setBackupsOpen(false)}
+          onExport={exportJSON}
+          onImport={importJSON}
+          onRestore={restoreVersion}
       />
 
       <CaptureBar

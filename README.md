@@ -51,11 +51,33 @@ device last read, so a freshly-installed device can never flatten the cloud with
 galaxy — which matters, because an installed PWA gets a storage sandbox separate from the
 browser's and therefore always starts empty.
 
-When the guard trips, `mergeStates` unions both copies by id: records only one side knows
-about are kept, and the cloud wins any id both sides hold. `repairState` then makes the
-two views of cluster membership (`glob.clusterId` and `cluster.globIds`) agree, so no
-thought can end up belonging to a cluster that doesn't list it — which would render it in
-neither place.
+The guard asks whether this device already *holds* the cloud's copy — not whose clock
+reads later. Timestamps can't answer it: capturing while signed out moves the local stamp
+without the cloud hearing a word, so the device that has seen the least of your galaxy
+looks like its freshest writer. That mistake cost a galaxy once.
+
+When the two have diverged, `reconcileWithRemote` three-way merges them against the ids
+the last synced copy held, so a thought captured here is kept while one deleted on another
+device stays deleted. `repairState` then makes the two views of cluster membership
+(`glob.clusterId` and `cluster.globIds`) agree, so no thought can end up belonging to a
+cluster that doesn't list it — which would render it in neither place.
+
+## Backups
+
+Three layers, because a single JSON document that changes all day is easy to lose:
+
+- **Version history.** The row about to be replaced is archived to `galaxy_versions`
+  before any save that shrinks the galaxy, and otherwise every few hours; the newest 20
+  are kept. Roll back from **? → version history** on desktop, or **Browse → Backups &
+  history** on a phone. Restoring is itself archived, so it can be undone.
+  ⚠️ Needs one-time setup: run `supabase/galaxy_versions.sql` in the Supabase SQL editor.
+- **Export / import.** A JSON file you keep. Import **merges** — it adds what the file
+  holds and never removes what you have.
+- **Rescue slot.** If a merge ever lets go of records this device held, the fuller copy
+  is kept in `localStorage['adhdo-rescue']` first.
+
+Supabase's own backups are not this layer: Free-plan projects get none, and Pro's daily
+backups are a whole-project restore to a point up to 24 hours stale.
 
 Without sign-in everything still works; the data just lives in this browser.
 

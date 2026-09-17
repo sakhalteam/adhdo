@@ -51,6 +51,8 @@ interface Props {
   onToggleFlagGlobs: (ids: string[]) => void
   onToggleAllTodosInGlobs: (ids: string[]) => void
   onDeleteGlobs: (ids: string[]) => void
+  /** Opens the shared backups panel (export / import / version history). */
+  onOpenBackups: () => void
 }
 
 type Tab = 'today' | 'upcoming' | 'search' | 'browse'
@@ -82,7 +84,7 @@ const FILTERS: { id: Filter; label: string }[] = [
 const PRIORITIES: Priority[] = [1, 2, 3, 4]
 
 export default function MobileApp(props: Props) {
-  const { state, onboardingActive, voice } = props
+  const { state, onboardingActive, voice, onOpenBackups } = props
   const [tab, setTabRaw] = useState<Tab>('today')
   const [openProject, setOpenProject] = useState<ProjectId | null>(null)
   const [sheet, setSheet] = useState<Sheet>(null)
@@ -336,6 +338,13 @@ export default function MobileApp(props: Props) {
         <button className="mobile-browse-row is-add" onClick={() => setSheet({ kind: 'newProject' })}>
           <span className="mobile-browse-ico">＋</span>
           <span className="mobile-browse-name">Add project</span>
+        </button>
+      </section>
+      <section className="mobile-group">
+        <button className="mobile-browse-row" onClick={onOpenBackups}>
+          <span className="mobile-browse-ico">🛟</span>
+          <span className="mobile-browse-name">Backups &amp; history</span>
+          <ChevronIcon />
         </button>
       </section>
     </>

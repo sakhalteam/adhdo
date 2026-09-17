@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import type { KeyboardEvent, RefObject } from 'react'
 import type { User } from '@supabase/supabase-js'
+import type { GalaxyVersion } from './store'
 import type { VoiceCapture } from './useVoiceCapture'
 
 export function HomeButton() {
@@ -200,6 +202,139 @@ export function CloudIndicator({ status }: { status: CloudStatus }) {
       {status === 'merged' && 'merged with cloud'}
       {status === 'pulled' && 'loaded from cloud'}
       {status === 'error' && 'sync failed'}
+    </div>
+  )
+}
+
+/**
+ * Backups: export/import a file, and roll back to an archived cloud version.
+ *
+ * One component for both layouts, in shared chrome rather than in the galaxy or
+ * the phone app, because "where are my backups" must not mean two different
+ * things on two devices — and because the day you need it is the day you are
+ * on whichever device is to hand. Desktop opens it from the `?` panel, mobile
+ * from a Browse row.
+ */
+function formatWhen(iso: string): string {
+  const then = Date.parse(iso)
+  if (Number.isNaN(then)) return iso
+  const mins = Math.round((Date.now() - then) / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const d = new Date(then)
+  const days = Math.round(hours / 24)
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (days < 7) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
+  return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${time}`
+}
+
+export function BackupsPanel({
+  open,
+  user,
+  versions,
+  loading,
+  onClose,
+  onExport,
+  onImport,
+  onRestore,
+}: {
+  open: boolean
+  user: User | null
+  versions: GalaxyVersion[]
+  loading: boolean
+  onClose: () => void
+  onExport: () => void
+  onImport: (file: File) => void
+  onRestore: (id: string) => void
+}) {
+  // Restoring replaces what is on screen, so it asks — inline, the same
+  // two-step the trash uses, rather than a browser confirm() nobody reads.
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    // `KeyboardEvent` is React's here — the DOM one needs qualifying.
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  useEffect(() => { if (!open) setConfirmId(null) }, [open])
+
+  if (!open) return null
+
+  return (
+    <div className="backups-backdrop" onClick={onClose}>
+      <div className="backups-panel" onClick={e => e.stopPropagation()}>
+        <div className="backups-head">
+          <span className="backups-title">backups</span>
+          <button className="backups-close" onClick={onClose} title="Close (Esc)">✕</button>
+        </div>
+
+        <div className="backups-section-title">a file you keep</div>
+        <div className="backups-actions">
+          <button className="backups-btn" onClick={onExport}>⤓ export JSON</button>
+          <label className="backups-btn">
+            ⤒ import JSON
+            <input
+              type="file"
+              accept="application/json,.json"
+              style={{ display: 'none' }}
+              onChange={e => {
+                const f = e.target.files?.[0]
+                if (f) onImport(f)
+                e.target.value = ''
+              }}
+            />
+          </label>
+        </div>
+        <div className="backups-note">Import <strong>merges</strong> — it adds what the file holds and never removes what you have.</div>
+
+        <div className="backups-divider" />
+        <div className="backups-section-title">version history</div>
+
+        {!user && (
+          <div className="backups-note">Sign in to keep versions in the cloud. Until then, the export file above is your backup.</div>
+        )}
+
+        {user && loading && <div className="backups-note">loading…</div>}
+
+        {user && !loading && versions.length === 0 && (
+          <div className="backups-note">
+            No versions yet. One is archived before any save that shrinks the galaxy, and
+            otherwise every few hours. If this stays empty, the <span className="backups-mono">galaxy_versions</span> table
+            may not exist yet — run <span className="backups-mono">supabase/galaxy_versions.sql</span>.
+          </div>
+        )}
+
+        {user && !loading && versions.length > 0 && (
+          <div className="backups-list">
+            {versions.map(v => (
+              <div className="backups-row" key={v.id}>
+                <div className="backups-row-main">
+                  <span className="backups-when">{formatWhen(v.savedAt ?? v.createdAt)}</span>
+                  <span className="backups-counts">
+                    {v.globCount} thought{v.globCount === 1 ? '' : 's'} · {v.clusterCount} cluster{v.clusterCount === 1 ? '' : 's'}
+                  </span>
+                </div>
+                {confirmId === v.id ? (
+                  <div className="backups-confirm">
+                    <button className="backups-btn is-danger" onClick={() => onRestore(v.id)}>restore</button>
+                    <button className="backups-btn" onClick={() => setConfirmId(null)}>cancel</button>
+                  </div>
+                ) : (
+                  <button className="backups-btn" onClick={() => setConfirmId(v.id)}>restore…</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="backups-note">
+          Restoring is reversible: what is on screen now is kept locally and archived as the newest version first.
+        </div>
+      </div>
     </div>
   )
 }

@@ -73,6 +73,7 @@ interface Props {
   onClearAll: () => void
   onExportJSON: () => void
   onImportJSON: (file: File) => void
+  onOpenBackups: () => void
 }
 
 export default function Galaxy({
@@ -88,7 +89,7 @@ export default function Galaxy({
   onRecolor, onRecolorCluster, onRecolorAllInCluster, onRecolorGlobs, onToggleAllTodosInGlobs, onDeleteGlobs, onTransferToNewCluster,
   onMoveGlobsToCluster,
   onConnectClusters, onDisconnectClusters, onMergeClusters,
-  onGatherFreeGlobs, onClearAll, onExportJSON, onImportJSON,
+  onGatherFreeGlobs, onClearAll, onExportJSON, onImportJSON, onOpenBackups,
 }: Props) {
   const { globs, clusters, connections } = state
   // Rank each cluster by lastInteraction. Most-recent → highest rank → highest z-index → paints on top.
@@ -755,6 +756,7 @@ export default function Galaxy({
         onClearAll={onClearAll}
         onExportJSON={onExportJSON}
         onImportJSON={onImportJSON}
+        onOpenBackups={onOpenBackups}
         onRescueClusters={rescueClustersIntoView}
         onGatherFreeGlobs={onGatherFreeGlobs}
         onJumpToSearchResult={jumpToResult}

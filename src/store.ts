@@ -7,6 +7,7 @@ const ONBOARDING_SEEN_KEY = 'adhdo-seen-onboarding-v1'
 const REMOTE_SEEN_KEY = 'adhdo-remote-seen'
 const REMOTE_BASE_KEY = 'adhdo-remote-base'
 const RESCUE_KEY = 'adhdo-rescue'
+const VERSION_AT_KEY = 'adhdo-version-at'
 const DIRTY_KEY = 'adhdo-dirty'
 
 /**
@@ -393,12 +394,14 @@ export type SaveResult = 'saved' | 'stale' | 'error'
  * an installed PWA gets its own storage sandbox separate from Safari's.
  *
  * `force` is for the case where overwriting IS the intent: writing back a copy
- * we just merged the cloud's version into.
+ * we just merged the cloud's version into. `archive` says to snapshot the row
+ * being replaced whatever the usual policy thinks — see the call site in
+ * `restoreVersion`, which is what makes a restore undoable.
  */
 export async function saveRemote(
   supabase: SupabaseClient,
   state: GalaxyState,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; archive?: boolean } = {},
 ): Promise<SaveResult> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return 'error'
@@ -411,6 +414,17 @@ export async function saveRemote(
       .maybeSingle()
     if (error) return 'error'
     if (head?.updated_at && head.updated_at !== getRemoteSeen()) return 'stale'
+  }
+
+  // Archive the row we're about to replace, so the previous save survives this
+  // one. Before the upsert and never after: afterwards there is nothing left to
+  // copy. Best-effort — a backup that fails must not cost you the save.
+  // `archive` is the caller saying it knows this write is a deliberate
+  // replacement — a restore, above all, which typically *grows* the galaxy and
+  // so trips none of the heuristics below, yet is precisely the write you are
+  // most likely to want to take back.
+  if (opts.archive || shouldArchive(state, getRemoteBase(), getArchivedAt())) {
+    await archiveRemote(supabase, user.id)
   }
 
   const { data, error } = await supabase
@@ -493,6 +507,153 @@ export async function loadRemote(supabase: SupabaseClient): Promise<RemoteState 
   return {
     state: hydrateState(data.state_json),
     updatedAt: data.updated_at,
+  }
+}
+
+// ── version history ──────────────────────────────────────────────────────────
+// `galaxy_states` is one row per user and every save is an UPSERT, so the
+// previous document dies the moment the next lands — which is why a single bad
+// write had nothing to roll back to. `galaxy_versions` keeps the last 20, and
+// what goes in it is the row we are ABOUT TO REPLACE, so a version really is
+// "the previous save" rather than a copy of whatever we happened to be holding.
+// Schema + RLS + the pruning trigger: supabase/galaxy_versions.sql.
+
+/** Routine cadence. A snapshot before every save would bury the useful ones. */
+const VERSION_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+export interface GalaxyVersion {
+  id: string
+  createdAt: string
+  /** `updated_at` of the galaxy_states row this was taken from. */
+  savedAt: string | null
+  globCount: number
+  clusterCount: number
+}
+
+/**
+ * Is this save worth archiving the current cloud row for?
+ *
+ * Two triggers, and the first is the one that matters: a write that **shrinks**
+ * the galaxy is exactly the shape of every way this app has lost data, so the
+ * copy it is about to replace is worth keeping whatever else is true. `base` is
+ * what the cloud held last time we agreed with it — comparing against our own
+ * previous state would miss a device that arrived holding less than the cloud.
+ *
+ * The second is a plain cadence, so an ordinary week still leaves you something
+ * to go back to. Pure, so `scripts/sync-check.mjs` can pin the policy down.
+ */
+export function shouldArchive(
+  outgoing: GalaxyState,
+  base: Set<string> | null,
+  lastArchivedAt: string | null,
+  now: number = Date.now(),
+): boolean {
+  if (base !== null && idsOf(outgoing).length < base.size) return true
+  if (!lastArchivedAt) return true
+  const last = Date.parse(lastArchivedAt)
+  return Number.isNaN(last) || now - last >= VERSION_INTERVAL_MS
+}
+
+/** When this device last wrote a snapshot — a stamp, so we needn't ask the server. */
+function getArchivedAt(): string | null {
+  return localStorage.getItem(VERSION_AT_KEY)
+}
+
+/**
+ * Copy the user's current cloud row into the version history.
+ *
+ * Best-effort by design: it runs on the way to a save, and failing to keep a
+ * backup is never a reason to refuse to save the thought you just typed.
+ */
+async function archiveRemote(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('galaxy_states')
+      .select('state_json, updated_at')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (error || !data?.state_json) return false
+
+    const doc = data.state_json as { globs?: unknown[]; clusters?: unknown[] }
+    const { error: insertError } = await supabase.from('galaxy_versions').insert({
+      user_id: userId,
+      state_json: data.state_json,
+      glob_count: doc.globs?.length ?? 0,
+      cluster_count: doc.clusters?.length ?? 0,
+      saved_at: data.updated_at,
+    })
+    if (insertError) return false
+    localStorage.setItem(VERSION_AT_KEY, new Date().toISOString())
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The history list — counts only, so opening the panel doesn't pull 20 documents. */
+export async function listVersions(supabase: SupabaseClient): Promise<GalaxyVersion[]> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+  const { data, error } = await supabase
+    .from('galaxy_versions')
+    .select('id, created_at, saved_at, glob_count, cluster_count')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+  if (error || !data) return []
+  return data.map(r => ({
+    id: r.id,
+    createdAt: r.created_at,
+    savedAt: r.saved_at,
+    globCount: r.glob_count ?? 0,
+    clusterCount: r.cluster_count ?? 0,
+  }))
+}
+
+/** Pull one version's full document, hydrated and repaired like any other load. */
+export async function loadVersion(supabase: SupabaseClient, id: string): Promise<GalaxyState | null> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+  const { data, error } = await supabase
+    .from('galaxy_versions')
+    .select('state_json')
+    .eq('user_id', user.id)
+    .eq('id', id)
+    .maybeSingle()
+  if (error || !data?.state_json) return null
+  return hydrateState(data.state_json)
+}
+
+// ── export / import ──────────────────────────────────────────────────────────
+
+/** The off-site backup: a file you hold, that no sync can reach. */
+export function exportPayload(state: GalaxyState): string {
+  return JSON.stringify({
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    state: serializeState(state),
+  }, null, 2)
+}
+
+/**
+ * Parse an exported file back into a state, or null if it isn't one.
+ *
+ * Accepts both the wrapped payload and a bare galaxy, because the thing you
+ * reach for in a panic may well be a `adhdo-galaxy` blob copied out of a
+ * console rather than a file this app wrote.
+ */
+export function parseImport(text: string): GalaxyState | null {
+  try {
+    const parsed = JSON.parse(text)
+    const raw = parsed?.state ?? parsed
+    if (!raw || typeof raw !== 'object') return null
+    if (!Array.isArray(raw.globs) || !Array.isArray(raw.clusters)) return null
+    return hydrateState({
+      globs: raw.globs,
+      clusters: raw.clusters,
+      connections: Array.isArray(raw.connections) ? raw.connections : [],
+    })
+  } catch {
+    return null
   }
 }
 

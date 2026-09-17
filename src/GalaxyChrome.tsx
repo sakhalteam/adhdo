@@ -1697,6 +1697,7 @@ export function HelpPanel({
   onClose,
   onExportJSON,
   onImportJSON,
+  onOpenBackups,
   onRescueClusters,
   onGatherFreeGlobs,
   onRequestClear,
@@ -1706,6 +1707,7 @@ export function HelpPanel({
   onClose: () => void
   onExportJSON: () => void
   onImportJSON: (file: File) => void
+  onOpenBackups: () => void
   onRescueClusters: () => void
   onGatherFreeGlobs: () => void
   onRequestClear: () => void
@@ -1757,7 +1759,7 @@ export function HelpPanel({
             >
               export JSON
             </button>
-            <label className="help-action-btn" title="Restore from a previously exported JSON">
+            <label className="help-action-btn" title="Merge a previously exported JSON back in">
               import JSON
               <input
                 type="file"
@@ -1772,6 +1774,13 @@ export function HelpPanel({
                 }}
               />
             </label>
+            <button
+              className="help-action-btn"
+              onClick={() => { onOpenBackups(); onClose() }}
+              title="Roll back to an earlier version kept in the cloud"
+            >
+              version history…
+            </button>
           </div>
 
           <div className="help-divider" />
@@ -1892,6 +1901,7 @@ export function GalaxyOverlays({
   onClearAll,
   onExportJSON,
   onImportJSON,
+  onOpenBackups,
   onRescueClusters,
   onGatherFreeGlobs,
   onJumpToSearchResult,
@@ -1972,6 +1982,7 @@ export function GalaxyOverlays({
   onClearAll: () => void
   onExportJSON: () => void
   onImportJSON: (file: File) => void
+  onOpenBackups: () => void
   onRescueClusters: () => void
   onGatherFreeGlobs: () => void
   onJumpToSearchResult: (result: SearchResult) => void
@@ -2289,6 +2300,7 @@ export function GalaxyOverlays({
         onClose={closeHelp}
         onExportJSON={onExportJSON}
         onImportJSON={onImportJSON}
+        onOpenBackups={onOpenBackups}
         onRescueClusters={onRescueClusters}
         onGatherFreeGlobs={onGatherFreeGlobs}
         onRequestClear={() => onSetClearConfirm(true)}
