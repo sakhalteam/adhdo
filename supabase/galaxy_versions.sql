@@ -33,20 +33,30 @@ create table if not exists public.galaxy_versions (
 create index if not exists galaxy_versions_user_created_idx
   on public.galaxy_versions (user_id, created_at desc);
 
+-- Expose it to the Data API. REQUIRED, and easy to miss: Supabase stopped
+-- auto-exposing new public-schema tables to PostgREST (new projects from
+-- 2026-05-30, existing ones like this from 2026-10-30). Without these grants
+-- supabase-js gets a 42501 and the panel stays empty for ever — and because
+-- archiving is best-effort and silent, nothing would tell you. Granting
+-- explicitly makes today's behaviour and next month's the same.
+grant select, insert, delete on public.galaxy_versions to authenticated;
+grant select, insert, delete on public.galaxy_versions to service_role;
+-- No grant to `anon` on purpose: version history is for signed-in users only.
+
 alter table public.galaxy_versions enable row level security;
 
--- Your rows, and only yours. No update policy on purpose: a version is a
--- record of what was, and nothing should be able to edit history in place.
+-- Your rows, and only yours. No update grant or policy on purpose: a version is
+-- a record of what was, and nothing should be able to edit history in place.
 drop policy if exists "read own versions"   on public.galaxy_versions;
 drop policy if exists "insert own versions" on public.galaxy_versions;
 drop policy if exists "delete own versions" on public.galaxy_versions;
 
 create policy "read own versions" on public.galaxy_versions
-  for select using (auth.uid() = user_id);
+  for select to authenticated using (auth.uid() = user_id);
 create policy "insert own versions" on public.galaxy_versions
-  for insert with check (auth.uid() = user_id);
+  for insert to authenticated with check (auth.uid() = user_id);
 create policy "delete own versions" on public.galaxy_versions
-  for delete using (auth.uid() = user_id);
+  for delete to authenticated using (auth.uid() = user_id);
 
 -- Keep the newest 20 per user. In the database rather than the client because
 -- a client that crashes mid-save must not be able to leave history unbounded,
