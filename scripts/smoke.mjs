@@ -445,6 +445,34 @@ const closeSheet = async page => {
   check('...where its checkbox is actually visible',
     await page.locator('.cluster-glob-item', { hasText: 'pressure-wash' }).locator('.todo-check').isVisible())
 
+  // ── cluster ✕ offers two actions, no yes/no ──
+  // The one-member cluster "Make todo" just built around the pressure-wash glob.
+  const wrap = page.locator('.cluster', { hasText: 'pressure-wash' })
+  await wrap.locator('.cluster-actions button').last().click()
+  await page.waitForTimeout(250)
+  check('Cluster ✕ offers release | destroy',
+    JSON.stringify(await wrap.locator('.dissolve-confirm button').allInnerTexts()) === '["release","destroy"]')
+  await page.waitForTimeout(250) // destroy ignores a double-click's second click
+  await wrap.locator('.dissolve-destroy').click()
+  d = await readState(page)
+  check('Destroy removes the cluster and its globs',
+    !d.clusters.some(c => c.globIds.includes('g2')) && !d.globs.some(g => g.id === 'g2'))
+  await page.keyboard.press('Control+z')
+  d = await readState(page)
+  check('...and a single undo brings both back',
+    d.globs.some(g => g.id === 'g2' && g.clusterId) && d.clusters.some(c => c.globIds.join() === 'g2'))
+
+  // ── a collapsed cluster opens on a plain click ──
+  const work = page.locator('.cluster[data-cluster-id="c1"]')
+  await work.locator('.cluster-actions button').first().click()
+  await page.waitForTimeout(300)
+  check('− collapses a cluster', (await work.getAttribute('class')).includes('collapsed'))
+  await work.locator('.cluster-name').click()
+  await page.waitForTimeout(300)
+  check('Clicking a collapsed cluster expands it',
+    !(await work.getAttribute('class')).includes('collapsed')
+    && (await page.locator('.cluster-name-edit').count()) === 0)
+
   // Same panel, reached through the `?` panel's backup section.
   await page.locator('.help-trigger').click()
   await page.waitForTimeout(250)

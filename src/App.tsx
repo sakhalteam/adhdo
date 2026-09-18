@@ -665,6 +665,25 @@ export default function App() {
     }))
   }, [setState])
 
+  /**
+   * The cluster AND everything in it, in one undo step. (deleteCluster, despite
+   * the name, sets the globs loose.) Looping deleteGlob would push one undo
+   * snapshot per glob and leave half-emptied clusters between them.
+   */
+  const destroyCluster = useCallback((id: string) => {
+    setState(prev => {
+      const cluster = prev.clusters.find(c => c.id === id)
+      if (!cluster) return prev
+      const doomed = new Set(cluster.globIds)
+      return {
+        ...prev,
+        globs: prev.globs.filter(g => !doomed.has(g.id) && g.clusterId !== id),
+        clusters: prev.clusters.filter(c => c.id !== id),
+        connections: prev.connections.filter(cn => cn.cluster1Id !== id && cn.cluster2Id !== id),
+      }
+    })
+  }, [setState])
+
   const renameCluster = useCallback((id: string, name: string) => {
     setState(prev => ({
       ...prev,
@@ -1180,6 +1199,7 @@ export default function App() {
         onToggleClusterCollapse={toggleClusterCollapse}
         onDissolveCluster={dissolveCluster}
         onDeleteCluster={deleteCluster}
+        onDestroyCluster={destroyCluster}
         onUpdateClusterPos={updateClusterPos}
         onTouchCluster={touchCluster}
         onReorderClusterGlobs={reorderClusterGlobs}

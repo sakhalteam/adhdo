@@ -877,24 +877,32 @@ body {
   color: var(--muted);
   animation: fadeScale 0.15s ease-out;
 }
-.dissolve-yes, .dissolve-no {
+/* scoped under .dissolve-confirm so these beat `.cluster-actions button` */
+.dissolve-confirm .dissolve-release,
+.dissolve-confirm .dissolve-destroy {
   background: none;
-  border: 1px solid var(--border);
+  border: 1px solid;
   border-radius: 5px;
-  padding: 1px 8px;
+  padding: 2px 8px;
   font-size: 11px;
+  line-height: 1.2;
   cursor: pointer;
   transition: all 0.15s;
 }
-.dissolve-yes {
+.dissolve-confirm .dissolve-release {
   color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
 }
-.dissolve-yes:hover { background: color-mix(in srgb, var(--success) 15%, transparent); }
-.dissolve-no {
-  color: var(--muted);
+.dissolve-confirm .dissolve-release:hover { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
+.dissolve-confirm .dissolve-destroy {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
 }
-.dissolve-no:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.dissolve-confirm .dissolve-destroy:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
+
+/* a collapsed cluster opens on click, so say so */
+.cluster.collapsed,
+.cluster.collapsed .cluster-name { cursor: pointer; }
 
 .cluster-count {
   display: block;
@@ -1921,7 +1929,7 @@ body {
   padding: 0 12px;
 }
 /* clears the tab bar + FAB */
-.mobile-list-pad { height: calc(150px + var(--safe-b)); }
+.mobile-list-pad { height: calc(140px + var(--safe-b)); }
 
 /* ── per-tab large title, Todoist style ── */
 .mobile-view-head {
@@ -1932,7 +1940,7 @@ body {
   padding: calc(46px + var(--safe-t)) 4px 10px;
 }
 .mobile-big-title {
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 800;
   letter-spacing: -0.01em;
   background: linear-gradient(90deg, var(--text), var(--accent-glow));
@@ -1940,10 +1948,10 @@ body {
   background-clip: text;
   color: transparent;
 }
-.mobile-view-sub { font-size: 13px; color: var(--muted); font-weight: 600; }
+.mobile-view-sub { font-size: 12px; color: var(--muted); font-weight: 600; }
 
 /* ── section groups (Overdue / Today / per-date / My Projects) ── */
-.mobile-group { margin-bottom: 16px; }
+.mobile-group { margin-bottom: 14px; }
 .mobile-group-head {
   display: flex;
   align-items: center;
@@ -1990,8 +1998,8 @@ body {
 /* ── task rows ── */
 .mobile-task-wrap {
   position: relative;
-  margin: 6px 0;
-  border-radius: 14px;
+  margin: 4px 0;
+  border-radius: 12px;
   overflow: hidden;
 }
 /* Swipe reveals: right = complete (green, left edge), left = schedule (violet,
@@ -2008,8 +2016,8 @@ body {
   opacity: 0;
   transition: opacity 0.12s, filter 0.12s;
 }
-.mobile-task-under.complete { justify-content: flex-start; padding-left: 22px; background: var(--success); }
-.mobile-task-under.schedule { justify-content: flex-end; padding-right: 22px; background: var(--accent); }
+.mobile-task-under.complete { justify-content: flex-start; padding-left: 20px; background: var(--success); }
+.mobile-task-under.schedule { justify-content: flex-end; padding-right: 20px; background: var(--accent); }
 .mobile-task-wrap.swiping .mobile-task-under { opacity: 1; }
 .mobile-task-under.armed { filter: brightness(1.25); }
 
@@ -2017,12 +2025,12 @@ body {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  min-height: 54px;
-  padding: 12px 12px;
+  gap: 10px;
+  min-height: 46px;
+  padding: 9px 11px;
   background: var(--bg-elev-solid);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 12px;
   touch-action: pan-y;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -2038,10 +2046,10 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 .mobile-task-text {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.35;
   color: var(--text);
   word-break: break-word;
@@ -2072,8 +2080,8 @@ body {
 /* the round Todoist checkbox — priority colors the ring */
 .mobile-check {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   margin-top: 1px;
   border-radius: 50%;
   border: 2px solid var(--border-bright);
@@ -2096,6 +2104,7 @@ body {
   border-color: color-mix(in srgb, var(--accent-bright) 50%, transparent);
   background: transparent;
 }
+.mobile-check svg { width: 12px; height: 12px; }
 .mobile-check.select.on {
   background: var(--accent);
   border-color: var(--accent-bright);
@@ -2123,15 +2132,15 @@ body {
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: 52px;
-  margin: 6px 0;
-  padding: 10px 12px;
+  min-height: 46px;
+  margin: 4px 0;
+  padding: 8px 11px;
   background: var(--bg-elev-solid);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 12px;
   color: var(--text);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 14px;
   cursor: pointer;
   text-align: left;
   -webkit-tap-highlight-color: transparent;
@@ -2156,7 +2165,7 @@ body {
   height: 10px;
   border-radius: 50%;
 }
-.mobile-proj-dot.big { width: 14px; height: 14px; }
+.mobile-proj-dot.big { width: 12px; height: 12px; }
 
 /* ── project drill-in ── */
 .mobile-proj-head {
@@ -2167,12 +2176,12 @@ body {
 }
 .mobile-back-btn {
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
@@ -2182,7 +2191,7 @@ body {
 .mobile-proj-title {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
@@ -2191,10 +2200,10 @@ body {
 .mobile-addtask-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  min-height: 46px;
-  padding: 8px 12px;
+  min-height: 40px;
+  padding: 6px 11px;
   background: transparent;
   border: none;
   color: var(--muted);
@@ -2205,15 +2214,15 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 .mobile-addtask-plus {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   color: var(--accent-bright);
   background: color-mix(in srgb, var(--accent) 20%, transparent);
-  font-size: 17px;
+  font-size: 15px;
 }
 .mobile-addtask-row:active .mobile-addtask-plus { background: var(--accent); color: #fff; }
 .mobile-completed-toggle {
@@ -2254,8 +2263,8 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  min-height: 50px;
-  padding-top: 5px;
+  min-height: 46px;
+  padding-top: 4px;
   background: none;
   border: none;
   color: var(--muted);
@@ -2288,20 +2297,20 @@ body {
 .mobile-fab-stack {
   position: fixed;
   right: calc(16px + var(--safe-r));
-  bottom: calc(76px + var(--safe-b));
+  bottom: calc(72px + var(--safe-b));
   z-index: 56;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 .mobile-fab {
-  width: 56px;
-  height: 56px;
+  width: 50px;
+  height: 50px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 18px;
+  border-radius: 16px;
   border: none;
   background: linear-gradient(135deg, var(--accent), #4f46e5);
   color: #fff;
@@ -2312,13 +2321,14 @@ body {
   -webkit-tap-highlight-color: transparent;
   transition: transform 0.12s ease;
 }
+.mobile-fab svg { width: 23px; height: 23px; }
 .mobile-fab:active { transform: scale(0.93); }
 /* the mic rides above the FAB; its base style is absolute inside a capture bar */
 .mobile-fab-stack .capture-mic {
   position: static;
   transform: none;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   background: rgba(19, 19, 37, 0.92);
   border-color: var(--border-bright);
 }
@@ -2442,7 +2452,7 @@ body {
   resize: none;
   overflow: hidden;
   font-family: inherit;
-  font-size: 17px;
+  font-size: 16px;
   line-height: 1.4;
   color: var(--text);
   background: transparent;
@@ -2457,14 +2467,14 @@ body {
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: 50px;
-  padding: 10px 8px;
+  min-height: 44px;
+  padding: 8px 8px;
   background: none;
   border: none;
   border-top: 1px solid var(--border);
   color: var(--text);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 14px;
   cursor: pointer;
   text-align: left;
   -webkit-tap-highlight-color: transparent;
@@ -2474,7 +2484,7 @@ body {
 .mobile-detail-ico { flex: 0 0 auto; width: 24px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .mobile-detail-row.danger .mobile-detail-ico { color: var(--danger); }
 .mobile-detail-label { flex: 1 1 auto; min-width: 0; }
-.mobile-detail-value { flex: 0 1 auto; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mobile-detail-value { flex: 0 1 auto; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mobile-detail-value.due-overdue { color: var(--p1); }
 .mobile-detail-value.due-today { color: var(--success); }
 .mobile-detail-value.due-tomorrow { color: var(--p2); }
@@ -2482,8 +2492,8 @@ body {
 .mobile-detail-row .mobile-chevron { color: var(--muted); }
 .mobile-prio-picker { display: flex; gap: 6px; margin-left: auto; }
 .mobile-prio-btn {
-  width: 40px;
-  height: 34px;
+  width: 38px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2578,13 +2588,13 @@ body {
   gap: 10px;
   width: 100%;
   text-align: left;
-  font-size: 16px;
+  font-size: 15px;
   font-family: inherit;
   color: var(--text);
   background: transparent;
   border: none;
   border-radius: 12px;
-  padding: 14px 12px;
+  padding: 11px 12px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }

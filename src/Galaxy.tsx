@@ -55,6 +55,7 @@ interface Props {
   onToggleClusterCollapse: (id: string) => void
   onDissolveCluster: (id: string) => void
   onDeleteCluster: (id: string) => void
+  onDestroyCluster: (id: string) => void
   onUpdateClusterPos: (id: string, x: number, y: number) => void
   onTouchCluster: (id: string) => void
   onReorderClusterGlobs: (clusterId: string, globIds: string[]) => void
@@ -84,7 +85,7 @@ export default function Galaxy({
   onClearCompletedInCluster, onToggleDone,
   onDuplicate, onUpdatePos,
   onCreateCluster, onConvertToCluster, onAddToCluster, onMoveGlobToCluster, onAddGlobToCluster, onRemoveFromCluster,
-  onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster,
+  onRenameCluster, onToggleClusterCollapse, onDissolveCluster, onDeleteCluster, onDestroyCluster,
   onUpdateClusterPos, onTouchCluster, onReorderClusterGlobs,
   onRecolor, onRecolorCluster, onRecolorAllInCluster, onRecolorGlobs, onToggleAllTodosInGlobs, onDeleteGlobs, onTransferToNewCluster,
   onMoveGlobsToCluster,
@@ -599,8 +600,8 @@ export default function Galaxy({
             onCancelClusterEditing={() => setEditingClusterId(null)}
             onToggleCollapse={() => onToggleClusterCollapse(c.id)}
             onRequestDissolve={() => setDissolveConfirm(c.id)}
-            onConfirmDissolve={() => { onDissolveCluster(c.id); setDissolveConfirm(null) }}
-            onCancelDissolve={() => setDissolveConfirm(null)}
+            onRelease={() => { onDissolveCluster(c.id); setDissolveConfirm(null) }}
+            onDestroy={() => { onDestroyCluster(c.id); setDissolveConfirm(null) }}
             onToggleGlobTodo={onToggleTodo}
             onToggleGlobDone={onToggleDone}
             onStartGlobEditing={setEditingId}
@@ -741,6 +742,7 @@ export default function Galaxy({
         onDelete={onDelete}
         onDeleteGlobs={onDeleteGlobs}
         onDeleteCluster={onDeleteCluster}
+        onDestroyCluster={onDestroyCluster}
         onDissolveCluster={onDissolveCluster}
         onTransferToNewCluster={onTransferToNewCluster}
         onAddGlobAt={onAddGlobAt}

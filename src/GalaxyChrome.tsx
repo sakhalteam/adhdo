@@ -846,8 +846,8 @@ export function ClusterHeader({
   onCancelEditing,
   onToggleCollapse,
   onRequestDissolve,
-  onConfirmDissolve,
-  onCancelDissolve,
+  onRelease,
+  onDestroy,
 }: {
   cluster: Cluster
   itemCount: number
@@ -859,9 +859,13 @@ export function ClusterHeader({
   onCancelEditing: () => void
   onToggleCollapse: () => void
   onRequestDissolve: () => void
-  onConfirmDissolve: () => void
-  onCancelDissolve: () => void
+  onRelease: () => void
+  onDestroy: () => void
 }) {
+  // "destroy" appears exactly where the ✕ was, under a cursor that hasn't moved.
+  // The second click of a double-click on ✕ would land on it and take the whole
+  // cluster with it, so it ignores clicks for a double-click's length.
+  const confirmOpenedAt = useRef(0)
   return (
     <div className="cluster-header" onContextMenu={onOpenMenu}>
       {editing ? (
@@ -878,7 +882,16 @@ export function ClusterHeader({
           }}
         />
       ) : (
-        <span className="cluster-name" onClick={e => { e.stopPropagation(); onStartEditing() }}>
+        <span
+          className="cluster-name"
+          onClick={e => {
+            // Collapsed, the name is part of the closed folder: let the click
+            // reach the card, which opens it. Once open, a click renames.
+            if (cluster.collapsed) return
+            e.stopPropagation()
+            onStartEditing()
+          }}
+        >
           {cluster.name}
         </span>
       )}
@@ -886,14 +899,36 @@ export function ClusterHeader({
         <button onClick={e => { e.stopPropagation(); onToggleCollapse() }}>
           {cluster.collapsed ? '＋' : '－'}
         </button>
+        {/* Both answers are actions: backing out is a click anywhere else or
+            Esc (closeMenus clears dissolveConfirm). An empty cluster has
+            nothing to release, so it only offers destroy. */}
         {dissolvePending ? (
           <div className="dissolve-confirm" onClick={e => e.stopPropagation()}>
-            <span>{itemCount === 0 ? 'delete cluster?' : 'release globs?'}</span>
-            <button className="dissolve-yes" onClick={onConfirmDissolve}>yes</button>
-            <button className="dissolve-no" onClick={onCancelDissolve}>no</button>
+            {itemCount > 0 && (
+              <button className="dissolve-release" onClick={onRelease} title="Remove the cluster, set its globs loose">
+                release
+              </button>
+            )}
+            <button
+              className="dissolve-destroy"
+              onClick={() => {
+                if (Date.now() - confirmOpenedAt.current < 350) return
+                onDestroy()
+              }}
+              title={itemCount > 0 ? 'Delete the cluster and everything in it' : 'Delete the cluster'}
+            >
+              destroy
+            </button>
           </div>
         ) : (
-          <button onClick={e => { e.stopPropagation(); onRequestDissolve() }} title={itemCount === 0 ? 'Delete cluster' : 'Release globs'}>
+          <button
+            onClick={e => {
+              e.stopPropagation()
+              confirmOpenedAt.current = Date.now()
+              onRequestDissolve()
+            }}
+            title={itemCount === 0 ? 'Delete cluster' : 'Release or destroy'}
+          >
             ✕
           </button>
         )}
@@ -1114,8 +1149,8 @@ export function ClusterCard({
   onCancelClusterEditing,
   onToggleCollapse,
   onRequestDissolve,
-  onConfirmDissolve,
-  onCancelDissolve,
+  onRelease,
+  onDestroy,
   onToggleGlobTodo,
   onToggleGlobDone,
   onStartGlobEditing,
@@ -1152,8 +1187,8 @@ export function ClusterCard({
   onCancelClusterEditing: () => void
   onToggleCollapse: () => void
   onRequestDissolve: () => void
-  onConfirmDissolve: () => void
-  onCancelDissolve: () => void
+  onRelease: () => void
+  onDestroy: () => void
   onToggleGlobTodo: (globId: string) => void
   onToggleGlobDone: (globId: string) => void
   onStartGlobEditing: (globId: string) => void
@@ -1168,6 +1203,10 @@ export function ClusterCard({
   onAddGlob: (text: string) => void
   onCancelAdd: () => void
 }) {
+  // Where the last press landed. A drag from the border ends with a click on
+  // the card that moved along under the pointer; distance tells it apart from
+  // a real tap.
+  const pressAt = useRef<{ x: number; y: number } | null>(null)
   return (
     <div
       className={className}
@@ -1176,7 +1215,18 @@ export function ClusterCard({
       onDragOver={onClusterDragOver}
       onDrop={onClusterDrop}
       onContextMenu={onOpenClusterMenu}
+      onPointerDownCapture={e => { pressAt.current = { x: e.clientX, y: e.clientY } }}
       onPointerDown={onClusterPointerDown}
+      onClick={e => {
+        // A collapsed cluster is a closed folder: clicking it anywhere opens it.
+        // Its own buttons and the drag/link/add handles keep their meaning.
+        if (!cluster.collapsed || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+        const t = e.target as HTMLElement
+        if (t.closest('button, input, .cluster-edge-hit, .cluster-drag-handle, .cluster-link-handle, .cluster-add-handle')) return
+        const p = pressAt.current
+        if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) >= 5) return
+        onToggleCollapse()
+      }}
     >
       <div className="cluster-edge-hit top" onPointerDown={onClusterEdgeDragStart} />
       <div className="cluster-edge-hit right" onPointerDown={onClusterEdgeDragStart} />
@@ -1207,8 +1257,8 @@ export function ClusterCard({
         onCancelEditing={onCancelClusterEditing}
         onToggleCollapse={onToggleCollapse}
         onRequestDissolve={onRequestDissolve}
-        onConfirmDissolve={onConfirmDissolve}
-        onCancelDissolve={onCancelDissolve}
+        onRelease={onRelease}
+        onDestroy={onDestroy}
       />
 
       {!cluster.collapsed && globs.length === 0 && (
@@ -1893,6 +1943,7 @@ export function GalaxyOverlays({
   onDelete,
   onDeleteGlobs,
   onDeleteCluster,
+  onDestroyCluster,
   onDissolveCluster,
   onTransferToNewCluster,
   onAddGlobAt,
@@ -1974,6 +2025,7 @@ export function GalaxyOverlays({
   onDelete: (id: string) => void
   onDeleteGlobs: (ids: string[]) => void
   onDeleteCluster: (id: string) => void
+  onDestroyCluster: (id: string) => void
   onDissolveCluster: (id: string) => void
   onTransferToNewCluster: (ids: string[], name?: string) => void
   onAddGlobAt: (text: string, x: number, y: number) => void
@@ -2212,8 +2264,7 @@ export function GalaxyOverlays({
             label={`delete cluster "${cluster.name}"${globCount > 0 ? ` and ${globCount} glob${globCount > 1 ? 's' : ''}` : ''}?`}
             confirmLabel="delete all"
             onConfirm={() => {
-              cluster.globIds.forEach(gid => onDelete(gid))
-              onDeleteCluster(clusterTrashConfirm)
+              onDestroyCluster(clusterTrashConfirm)
               onSetClusterTrashConfirm(null)
             }}
             onCancel={() => onSetClusterTrashConfirm(null)}
