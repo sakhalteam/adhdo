@@ -41,7 +41,21 @@ create index if not exists galaxy_versions_user_created_idx
 -- explicitly makes today's behaviour and next month's the same.
 grant select, insert, delete on public.galaxy_versions to authenticated;
 grant select, insert, delete on public.galaxy_versions to service_role;
--- No grant to `anon` on purpose: version history is for signed-in users only.
+--
+-- ⚠️ These are belt-and-braces, not the whole picture. This project also carries
+-- Supabase's default privileges (`alter default privileges in schema public
+-- grant all on tables to anon, authenticated, service_role`), so the table ends
+-- up with ALL seven privileges for anon, authenticated, postgres and
+-- service_role — verified 2026-09-18, and `galaxy_states` is identical. Fighting
+-- that would only make this table inconsistent with the one beside it.
+--
+-- So the grants are NOT what keeps your versions private. RLS below is. The
+-- policies cover select/insert/delete for `authenticated` only, which means
+-- anon matches no policy and is denied everything, and nobody has an UPDATE
+-- policy so history cannot be edited in place whatever the grant column says.
+-- Stating the grants explicitly is still worth it: if Supabase drops those
+-- defaults at the 2026-10-30 cutoff, these survive because they are real grants
+-- on a real table rather than an inherited default.
 
 alter table public.galaxy_versions enable row level security;
 
