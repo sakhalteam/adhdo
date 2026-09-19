@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, RefObject } from 'react'
 import type { User } from '@supabase/supabase-js'
 import type { GalaxyVersion } from './store'
@@ -253,13 +253,24 @@ export function BackupsPanel({
   // two-step the trash uses, rather than a browser confirm() nobody reads.
   const [confirmId, setConfirmId] = useState<string | null>(null)
 
+  // Esc closes — through a ref, and the effect depends only on `open`.
+  //
+  // Depending on `onClose` meant re-running every render, because callers pass
+  // an inline arrow. On desktop the galaxy's physics loop pushes a new state
+  // object every animation frame, so this listener was being removed and
+  // re-added ~60 times a second and an Esc landing in one of those gaps was
+  // simply dropped. It failed about one run in six — the same trap as the
+  // autosave interval (see CLAUDE.md), one layer down. Mobile never saw it:
+  // no physics loop, no re-render storm.
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose })
   useEffect(() => {
     if (!open) return
     // `KeyboardEvent` is React's here — the DOM one needs qualifying.
-    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') closeRef.current() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  }, [open])
 
   useEffect(() => { if (!open) setConfirmId(null) }, [open])
 

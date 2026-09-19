@@ -163,6 +163,16 @@ so anything that ended the page without it lost the session. Fixed 2026-08-22. S
 reasoning for the `beforeunload` listener. `stateSignature` (which ignores x/y/velocity)
 is what keeps the write itself cheap.
 
+**It bites window listeners too, and more quietly** (2026-09-18). `BackupsPanel`'s Esc
+handler depended on `[open, onClose]`, and callers pass `onClose` as an inline arrow — so
+on desktop the effect re-ran every frame, removing and re-adding the `keydown` listener
+~60×/second, and an Esc landing in one of those gaps was dropped. It failed roughly **one
+run in six**, which is worse than failing always: it reads as a flaky test. Mobile never
+saw it — no physics loop, no re-render storm. The fix is the same shape as the autosave
+one: hold the callback in a ref, depend only on what actually gates the listener (`open`).
+**Any effect that registers a window/document listener on this app's desktop path needs a
+dep array that can't churn** — if a callback prop is in there, put it behind a ref.
+
 ## Testing
 
 `node scripts/group-drag-check.mjs` — 77 assertions covering the band → carry-selection
@@ -199,7 +209,7 @@ calling `.maybeSingle()`.
 row is a to-do the checkbox moves into the left gutter, so "double-click the same spot
 again" is not a valid way to reset between probes — the right square always is.
 
-`node scripts/smoke.mjs` — COUNT_PLACEHOLDER end-to-end assertions across both layouts: Today/Upcoming/Browse tabs, tab badge, quick-add NL parsing ("tomorrow p1" lifts out), checkbox + swipe-right complete, swipe-left schedule, scroll-doesn't-swipe, detail-sheet priority, project drill-in + Completed fold, long-press select, bulk move, single-undo-per-batch, search/filters, state repair, add-project, an Inbox to-do staying in the Inbox — then desktop: galaxy intact, due chips on rows and globs, priority-tinted todo-checks, the context-menu Schedule popover writing state, and the agenda dock (badge count, overdue/today split, a context-menu-scheduled task appearing in it, undated thoughts staying out, surviving a galaxy click, tick-to-complete, click-to-fly, Esc to close), the right-click glob/cluster picker (cluster lands in rename mode), Make todo wrapping a free glob in a one-member cluster, cluster ✕ release|destroy with a single-step undo, click-to-expand on a collapsed cluster, and the backups panel from both layouts (Browse row on mobile, `?` → version history on desktop, Esc to close) with an import proving it merges rather than replaces. Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`, or set `BROWSER_PATH=/path/to/chromium` (works for group-drag-check too). Both scripts need the dev server up, which needs Supabase env vars — a dummy `.env.local` (any URL/key) is enough for local runs.
+`node scripts/smoke.mjs` — 70 end-to-end assertions across both layouts: Today/Upcoming/Browse tabs, tab badge, quick-add NL parsing ("tomorrow p1" lifts out), checkbox + swipe-right complete, swipe-left schedule, scroll-doesn't-swipe, detail-sheet priority, project drill-in + Completed fold, long-press select, bulk move, single-undo-per-batch, search/filters, state repair, add-project, an Inbox to-do staying in the Inbox — then desktop: galaxy intact, due chips on rows and globs, priority-tinted todo-checks, the context-menu Schedule popover writing state, and the agenda dock (badge count, overdue/today split, a context-menu-scheduled task appearing in it, undated thoughts staying out, surviving a galaxy click, tick-to-complete, click-to-fly, Esc to close), the right-click glob/cluster picker (cluster lands in rename mode), Make todo wrapping a free glob in a one-member cluster, cluster ✕ release|destroy with a single-step undo, click-to-expand on a collapsed cluster, and the backups panel from both layouts (Browse row on mobile, `?` → version history on desktop, Esc to close) with an import proving it merges rather than replaces. Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`, or set `BROWSER_PATH=/path/to/chromium` (works for group-drag-check too). Both scripts need the dev server up, which needs Supabase env vars — a dummy `.env.local` (any URL/key) is enough for local runs.
 
 Two gotchas when writing harnesses for this app:
 1. **Seed localStorage with `context.addInitScript`, never "goto → set → reload".** adhdo saves on `beforeunload`, so the reload writes the empty state it booted with straight over your seed.
