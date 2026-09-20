@@ -129,6 +129,36 @@ const closeSheet = async page => {
     Math.abs(shell.tabbarBottom - shell.viewportH) < 1,
     `${shell.tabbarBottom} vs ${shell.viewportH}`)
 
+  // The device-measured correction (src/iosViewport.ts) must be inert here — a
+  // desktop browser has no shortfall — and must still produce a flush tab bar
+  // when it does engage, which is the state no desktop browser can reach on its
+  // own. Force the class on with a zero shortfall to exercise that path.
+  const corrected = await page.evaluate(() => {
+    const before = {
+      cls: document.documentElement.classList.contains('ios-short-viewport'),
+      px: getComputedStyle(document.documentElement).getPropertyValue('--ios-shortfall').trim(),
+    }
+    document.documentElement.classList.add('ios-short-viewport')
+    const r = el => document.querySelector(el).getBoundingClientRect()
+    const after = {
+      appBottom: r('.mobile-app').bottom,
+      tabbarBottom: r('.mobile-tabbar').bottom,
+      rootTransform: getComputedStyle(document.querySelector('.mobile-root')).transform,
+      viewportH: window.innerHeight,
+    }
+    document.documentElement.classList.remove('ios-short-viewport')
+    return { before, after }
+  })
+  check('No shortfall is measured in a browser that does not have the bug',
+    corrected.before.cls === false && corrected.before.px === '0px',
+    `class=${corrected.before.cls} var=${corrected.before.px}`)
+  check('With the correction engaged, .mobile-root becomes the fixed containing block',
+    corrected.after.rootTransform !== 'none', corrected.after.rootTransform)
+  check('...and the app box and tab bar are still flush with the window bottom',
+    Math.abs(corrected.after.appBottom - corrected.after.viewportH) < 1
+    && Math.abs(corrected.after.tabbarBottom - corrected.after.viewportH) < 1,
+    `app ${corrected.after.appBottom}, tabbar ${corrected.after.tabbarBottom}, window ${corrected.after.viewportH}`)
+
   // 1. Today tab: overdue + today sections from due dates.
   check('Today shows the overdue task',
     await page.locator('.mobile-group-head.is-overdue').isVisible()

@@ -1,7 +1,13 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { watchViewportShortfall } from './iosViewport'
 import './index.css'
+
+// Measure the installed-on-iOS viewport shortfall before the first paint, so the
+// shell is never briefly short. Inert wherever the bug is absent — see
+// src/iosViewport.ts.
+watchViewportShortfall()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -72,6 +72,29 @@ html, body { height: 100%; overflow: hidden; }
   inset: 0;
   overflow: hidden;
 }
+
+/* ── the measured correction ───────────────────────────────
+ * Belt and braces for the note above, because it has now been wrong twice and
+ * neither wrong version could be caught from a laptop. `src/iosViewport.ts`
+ * measures, ON THE DEVICE, how far the layout viewport falls short of the real
+ * screen and publishes it here. If the fix above is sufficient the measurement
+ * is 0, this class never lands, and none of the following applies.
+ *
+ * When it does land: `height: 100%` on a fixed element is 100% of the short
+ * initial containing block, so adding the shortfall back gets the real screen.
+ * `bottom: auto` because `inset: 0` would otherwise pin the height itself.
+ *
+ * And ONLY here does `.mobile-root` become the containing block for the phone's
+ * fixed chrome. That transform is what the 2026-09-17 fix reached for, and on
+ * its own it is harmful: with a short app box it drags the tab bar up off the
+ * screen edge. Paired with a box we have measured to be the right height it is
+ * the correct move, because in this state `bottom: 0` against the viewport is
+ * short too. Conditional on the same class, so the two can never separate. */
+:root.ios-short-viewport #root {
+  bottom: auto;
+  height: calc(100% + var(--ios-shortfall, 0px));
+}
+:root.ios-short-viewport .mobile-root { transform: translateZ(0); }
 body {
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   background: var(--bg);
@@ -2689,7 +2712,9 @@ body {
  * same short initial containing block (see the note at the top of this file),
  * so the transform only dragged the tab bar 59px up off the screen edge and
  * left body's background showing beneath it. Nothing here may reintroduce a
- * transform, filter, perspective or will-change on `.app` / `.mobile-root`. */
+ * transform, filter, perspective or will-change on `.app` / `.mobile-root`
+ * unconditionally. The one sanctioned exception is `.ios-short-viewport`, at the
+ * top of this file, where the app box has been measured on the device first. */
 
 /* Standalone has no browser chrome above it — without this the title sits
    underneath the clock and the carrier bars. */

@@ -4,9 +4,15 @@
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover lets the app paint under the notch/home indicator;
          the CSS pays that back with env(safe-area-inset-*) padding.
-         user-scalable=no because the galaxy and the list both handle their own
-         gestures — a pinch here only ever zooms the UI by accident. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+         ⚠️ `user-scalable=no` used to ride along here, to stop a stray pinch
+         zooming the galaxy. It is the ONLY head-tag difference from sibling repo
+         traction, which does not have this file's bottom-gap bug on the same
+         phone in the same install mode — and a non-scalable viewport is exactly
+         the case where WebKit has reason to lay out against the unobscured
+         content rect rather than the full window. Safari has ignored it for
+         pinch-zoom since iOS 10 anyway, so it was buying nothing. Do not put it
+         back; the app's own gesture handlers already call preventDefault. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="adhdo – a galaxy-brained todo app" />
     <meta name="theme-color" content="#0a0a1a" />
     <meta name="color-scheme" content="dark" />
