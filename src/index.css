@@ -42,22 +42,35 @@
 
 /* ── reset ───────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body, #root { height: 100%; overflow: hidden; }
-/* ⚠️ iOS home-screen web app: `100%` comes up ~59px short at the bottom.
+/* ⚠️ iOS home-screen web app: percentage and viewport heights come up
+ * `safe-area-inset-top` short (59px on a 15 Pro), and `100dvh` does NOT save
+ * you — it measures the same short box.
+ *
  * Installed standalone with `apple-mobile-web-app-status-bar-style:
  * black-translucent` + `viewport-fit=cover`, WebKit lays the page out from
- * y=0 (correctly full-bleed under the Dynamic Island) but sizes the layout
- * viewport as screen MINUS the status bar — and a shell that can't scroll
- * (`height: 100%` + `overflow: hidden`) is pinned to that short number with
- * no content flow to push past it. The app's box therefore stops exactly
- * `safe-area-inset-top` above the screen bottom and the canvas paints the
- * remainder in body's background: the dead strip under the mobile tab bar.
- * traction dodges this only because it is a normally-flowing scrollable
- * document (`min-height: 100%`, no `overflow: hidden`).
- * Dynamic viewport units measure the window itself, so they don't inherit
- * the miscount. Kept behind @supports so the `100%` above stays the fallback. */
-@supports (height: 100dvh) {
-  html, body, #root { height: 100dvh; }
+ * y=0 (correctly full-bleed under the Dynamic Island) but sizes the INITIAL
+ * CONTAINING BLOCK from the unobscured content rect — screen MINUS the status
+ * bar. Everything resolved against the ICB (`height: 100%`, `100vh`, `100dvh`)
+ * inherits that miscount, so a shell that cannot scroll is pinned 59px above
+ * the screen bottom and the canvas paints the rest in body's `--bg`.
+ *
+ * The viewport that `position: fixed` resolves against is NOT the ICB — it is
+ * the full window. Sibling repo `traction` proves it: its tab bar is a plain
+ * `position: fixed; bottom: 0` and it lands flush on the screen edge, on the
+ * same phone, in the same install mode, with identical head tags.
+ *
+ * So the shell is a fixed box, not a tall one: `#root` is `position: fixed;
+ * inset: 0` and everything inside measures 100% of THAT. No JS, no dvh, no
+ * per-element safe-area arithmetic to keep in sync. ⚠️ Do not put a
+ * `transform`/`filter`/`will-change` on `#root`, `.app` or `.mobile-root` —
+ * any of those makes the element a containing block for its fixed descendants
+ * and drags the tab bar, FAB and sheets back into the short box. That is
+ * exactly how this bug shipped the first time round. */
+html, body { height: 100%; overflow: hidden; }
+#root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
 }
 body {
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -65,11 +78,8 @@ body {
   color: var(--text);
 }
 
-/* ── app ─────────────────────────────────────────────── */
+/* ── app ───────────────────────────────────────── */
 .app { height: 100%; position: relative; }
-@supports (height: 100dvh) {
-  .app { height: 100dvh; }
-}
 
 /* ── home button ─────────────────────────────────────── */
 .home-btn {
@@ -2671,17 +2681,15 @@ body {
   --safe-r: env(safe-area-inset-right, 0px);
 }
 
-/* ⚠️ Anchor the phone's fixed chrome to the APP BOX, not to WebKit's viewport.
- * See the `100dvh` note at the top of this file: installed on iOS the initial
- * containing block is `safe-area-inset-top` shorter than the screen, and
- * `position: fixed; bottom: 0` obeys that same short box — which is why the
- * tab bar floated ~59px off the bottom edge with body's background showing
- * under it. A transform on the root makes `.mobile-root` the containing block
- * for every fixed descendant (tab bar, FAB stack, sheets, bulk bar, undo pill,
- * home/auth buttons), so they all measure the box we sized with `dvh` instead.
- * `translateZ(0)` over `contain: paint` deliberately: paint containment would
- * also clip, and the sheets animate in from translateY(100%). */
-.mobile-root { transform: translateZ(0); }
+/* ⚠️ The phone's fixed chrome (tab bar, FAB stack, sheets, bulk bar, undo
+ * pill, home/auth buttons) is anchored to the WINDOW, and must stay that way.
+ * `.mobile-root` used to carry `transform: translateZ(0)` to make itself the
+ * containing block for those fixed descendants — on the theory that the app
+ * box, sized with `dvh`, was the honest one. It wasn't: `dvh` measures the
+ * same short initial containing block (see the note at the top of this file),
+ * so the transform only dragged the tab bar 59px up off the screen edge and
+ * left body's background showing beneath it. Nothing here may reintroduce a
+ * transform, filter, perspective or will-change on `.app` / `.mobile-root`. */
 
 /* Standalone has no browser chrome above it — without this the title sits
    underneath the clock and the carrier bars. */
@@ -3073,9 +3081,9 @@ body {
    One panel for both layouts, so "where are my backups" means the same
    thing on the laptop and the phone. Own `backups-` namespace — it is
    neither a galaxy class nor a mobile one, so nothing can collide with it
-   (see the class-collision note in CLAUDE.md). Sized off dvh and paying
-   the safe areas back, because on an installed iOS app the fixed edges
-   obey the short initial containing block. */
+   (see the class-collision note in CLAUDE.md). Fixed to the window and
+   paying the safe areas back, so an installed iOS app cannot tuck it under
+   the Dynamic Island or the home indicator. */
 .backups-backdrop {
   position: fixed;
   inset: 0;

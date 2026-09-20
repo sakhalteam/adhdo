@@ -95,6 +95,40 @@ const closeSheet = async page => {
 {
   const { ctx, page, errors } = await session({ width: 390, height: 844 }, true)
 
+  // 0. The shell reaches the bottom of the window.
+  //    Installed on iOS, `height: 100%` / `100vh` / `100dvh` all resolve against
+  //    an initial containing block that is `safe-area-inset-top` SHORT, so the
+  //    app box stopped 59px above the screen edge and body's background showed
+  //    through under the tab bar. `position: fixed` measures the real window
+  //    instead, so `#root` is fixed — and a transform on `.app`/`.mobile-root`
+  //    would make it the containing block for the fixed chrome and put the tab
+  //    bar right back in the short box. A desktop browser cannot reproduce the
+  //    short ICB, so assert the two structural facts the fix rests on, plus the
+  //    flush geometry that must hold everywhere.
+  const shell = await page.evaluate(() => {
+    const cs = el => getComputedStyle(el)
+    const bottom = sel => document.querySelector(sel).getBoundingClientRect().bottom
+    return {
+      rootPosition: cs(document.getElementById('root')).position,
+      rootTransform: cs(document.querySelector('.mobile-root')).transform,
+      appTransform: cs(document.querySelector('.app')).transform,
+      viewportH: window.innerHeight,
+      appBottom: bottom('.mobile-app'),
+      tabbarBottom: bottom('.mobile-tabbar'),
+    }
+  })
+  check('#root is fixed, so the shell measures the window not the short ICB',
+    shell.rootPosition === 'fixed', shell.rootPosition)
+  check('Nothing transforms .app/.mobile-root into a containing block for the fixed chrome',
+    shell.rootTransform === 'none' && shell.appTransform === 'none',
+    `${shell.appTransform} / ${shell.rootTransform}`)
+  check('The mobile app box reaches the bottom of the window',
+    Math.abs(shell.appBottom - shell.viewportH) < 1,
+    `${shell.appBottom} vs ${shell.viewportH}`)
+  check('The tab bar sits flush on the bottom edge',
+    Math.abs(shell.tabbarBottom - shell.viewportH) < 1,
+    `${shell.tabbarBottom} vs ${shell.viewportH}`)
+
   // 1. Today tab: overdue + today sections from due dates.
   check('Today shows the overdue task',
     await page.locator('.mobile-group-head.is-overdue').isVisible()
