@@ -220,14 +220,14 @@ calling `.maybeSingle()`.
 row is a to-do the checkbox moves into the left gutter, so "double-click the same spot
 again" is not a valid way to reset between probes — the right square always is.
 
-`node scripts/viewport-check.mjs` — 12 assertions on `shortfallPx`, the installed-on-iOS
+`node scripts/viewport-check.mjs` — 20 assertions on `shortfallPx`, the installed-on-iOS
 viewport correction. **No browser, no dev server, no dependencies.** It exists because the
 condition cannot be staged: only an iOS home-screen web app hands out a layout viewport
 shorter than its own screen, and the two fixes shipped before it were both reasoned out on
 a laptop and both wrong. The readings are what the real devices report. Covers the bug
 itself, every way the function must refuse to act (Safari's chrome is not a shortfall, a
 gap bigger than the status bar, a viewport taller than the screen, no inset, unreadable
-metrics), both orientations, and desktop inertness.
+metrics), both orientations, desktop inertness, and a device matrix — nothing in the function is tuned to the phone the bug was found on, so the 16 Pro Max reclaims its own 62px and the SE its own 20px rather than a copied 59, an iPad in Split View (which does not own the screen) is left alone, and Android, a plain browser tab and a future iOS that stops doing this all get zero.
 
 `node scripts/smoke.mjs` — 79 end-to-end assertions across both layouts: Today/Upcoming/Browse tabs, tab badge, quick-add NL parsing ("tomorrow p1" lifts out), checkbox + swipe-right complete, swipe-left schedule, scroll-doesn't-swipe, detail-sheet priority, project drill-in + Completed fold, long-press select, bulk move, single-undo-per-batch, search/filters, state repair, add-project, an Inbox to-do staying in the Inbox, the iOS shell geometry (`#root` fixed, no transform on `.app`/`.mobile-root`, app box and tab bar flush with the window bottom, the measured correction inert by default and still flush when forced on, a clip-free shell chain, all four tab labels inside the window) — then desktop: galaxy intact, due chips on rows and globs, priority-tinted todo-checks, the context-menu Schedule popover writing state, and the agenda dock (badge count, overdue/today split, a context-menu-scheduled task appearing in it, undated thoughts staying out, surviving a galaxy click, tick-to-complete, click-to-fly, Esc to close), the right-click glob/cluster picker (cluster lands in rename mode), Make todo wrapping a free glob in a one-member cluster, cluster ✕ release|destroy with a single-step undo, click-to-expand on a collapsed cluster, and the backups panel from both layouts (Browse row on mobile, `?` → version history on desktop, Esc to close) with an import proving it merges rather than replaces. Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`, or set `BROWSER_PATH=/path/to/chromium` (works for group-drag-check too). Both scripts need the dev server up, which needs Supabase env vars — a dummy `.env.local` (any URL/key) is enough for local runs.
 

@@ -67,6 +67,30 @@ eq('Portrait still works when the screen dims arrive pre-swapped',
 eq('Desktop (no navigator.standalone) is untouched',
   shortfallPx({ screenW: 2560, screenH: 1440, topInset: 0, standalone: false, clientHeight: 1300, landscape: true }), 0)
 
+// ── the device matrix ───────────────────────────────────────────
+// Nothing in shortfallPx is tuned to the phone the bug was found on: the status
+// bar it reclaims is whatever THAT device reports as its top inset. These are
+// the readings other hardware gives, so "it works on Nic's 15 Pro" is not the
+// claim being made.
+const device = (name, d, want) => eq(name, shortfallPx(d), want)
+
+device('iPhone 15 Pro — reclaims its 59px Dynamic Island inset',
+  { standalone: true, screenW: 393, screenH: 852, clientHeight: 793, landscape: false, topInset: 59 }, 59)
+device('iPhone 16 Pro Max — reclaims its larger 62px inset, not a copied 59',
+  { standalone: true, screenW: 440, screenH: 956, clientHeight: 894, landscape: false, topInset: 62 }, 62)
+device('iPhone SE — no notch, a 20px status bar, and it reclaims exactly that',
+  { standalone: true, screenW: 375, screenH: 667, clientHeight: 647, landscape: false, topInset: 20 }, 20)
+device('iPad, installed and owning the whole screen',
+  { standalone: true, screenW: 1024, screenH: 1366, clientHeight: 1342, landscape: false, topInset: 24 }, 24)
+device('iPad in Split View does NOT own the screen, so nothing is reclaimed',
+  { standalone: true, screenW: 1024, screenH: 1366, clientHeight: 1024, landscape: false, topInset: 24 }, 0)
+device('Android installed PWA (no navigator.standalone) is left alone',
+  { standalone: false, screenW: 412, screenH: 915, clientHeight: 915, landscape: false, topInset: 24 }, 0)
+device('A friend opening the link in a browser instead of installing it',
+  { standalone: false, screenW: 393, screenH: 852, clientHeight: 733, landscape: false, topInset: 59 }, 0)
+device('A future iOS that stops doing this needs no correction and gets none',
+  { standalone: true, screenW: 393, screenH: 852, clientHeight: 852, landscape: false, topInset: 59 }, 0)
+
 const failed = results.filter(r => !r.ok)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 process.exit(failed.length ? 1 : 0)
