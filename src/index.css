@@ -66,11 +66,20 @@
  * any of those makes the element a containing block for its fixed descendants
  * and drags the tab bar, FAB and sheets back into the short box. That is
  * exactly how this bug shipped the first time round. */
-html, body { height: 100%; overflow: hidden; }
+/* ⚠️ NO `overflow: hidden` ON THE SHELL. It is not scroll prevention here —
+ * `#root` is fixed, so nothing is in flow for the page to scroll — and it is
+ * what cut the tab bar's labels off on 2026-09-20 round four. `overflow` on the
+ * root element propagates to the VIEWPORT, and the viewport's clip rect is the
+ * short initial containing block, so the shell painted correctly and was then
+ * clipped 59px above the screen bottom: the bar's text and its own background
+ * simply stopped. Position was right, paint was cut. traction has no
+ * `overflow: hidden` anywhere on its shell, which is why it never showed this.
+ * The scrollers that actually need clipping (`.galaxy`, `.mobile-list`) keep
+ * their own. */
+html, body { height: 100%; }
 #root {
   position: fixed;
   inset: 0;
-  overflow: hidden;
 }
 
 /* ── the measured correction ───────────────────────────────
@@ -99,6 +108,11 @@ body {
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
+  /* What `overflow: hidden` was really for, minus the clip: kill iOS
+     rubber-banding and pull-to-refresh. There is nothing in flow to scroll
+     anyway (`#root` is fixed), but a stray overscroll on the galaxy reads as
+     the whole app coming loose. */
+  overscroll-behavior: none;
 }
 
 /* ── app ───────────────────────────────────────── */

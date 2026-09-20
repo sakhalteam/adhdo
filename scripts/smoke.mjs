@@ -159,6 +159,31 @@ const closeSheet = async page => {
     && Math.abs(corrected.after.tabbarBottom - corrected.after.viewportH) < 1,
     `app ${corrected.after.appBottom}, tabbar ${corrected.after.tabbarBottom}, window ${corrected.after.viewportH}`)
 
+  // Round four: the correction placed the tab bar correctly and then `overflow:
+  // hidden` on the shell CLIPPED it — `overflow` on the root element propagates
+  // to the viewport, whose clip rect is the short initial containing block, so
+  // the labels and the bar's own background stopped 59px above the screen edge.
+  // Position was right, paint was cut. Nothing in the shell chain may clip.
+  const clip = await page.evaluate(() => {
+    const ov = el => getComputedStyle(el).overflow
+    const labels = [...document.querySelectorAll('.mobile-tab-label')]
+    return {
+      html: ov(document.documentElement),
+      body: ov(document.body),
+      root: ov(document.getElementById('root')),
+      count: labels.length,
+      texts: labels.map(l => l.textContent),
+      lowest: Math.max(...labels.map(l => l.getBoundingClientRect().bottom)),
+      viewportH: window.innerHeight,
+    }
+  })
+  check('Nothing in the shell chain clips (html / body / #root)',
+    ![clip.html, clip.body, clip.root].some(v => v.includes('hidden')),
+    `html:${clip.html} body:${clip.body} #root:${clip.root}`)
+  check('All four tab labels are present and inside the window',
+    clip.count === 4 && clip.lowest <= clip.viewportH + 0.5,
+    `${clip.count} labels (${clip.texts.join('/')}), lowest ${clip.lowest} vs ${clip.viewportH}`)
+
   // 1. Today tab: overdue + today sections from due dates.
   check('Today shows the overdue task',
     await page.locator('.mobile-group-head.is-overdue').isVisible()
