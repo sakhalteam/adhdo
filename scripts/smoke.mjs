@@ -129,35 +129,41 @@ const closeSheet = async page => {
     Math.abs(shell.tabbarBottom - shell.viewportH) < 1,
     `${shell.tabbarBottom} vs ${shell.viewportH}`)
 
-  // The device-measured correction (src/iosViewport.ts) must be inert here — a
-  // desktop browser has no shortfall — and must still produce a flush tab bar
-  // when it does engage, which is the state no desktop browser can reach on its
-  // own. Force the class on with a zero shortfall to exercise that path.
-  const corrected = await page.evaluate(() => {
+  // src/iosViewport.ts MEASURES the installed-on-iOS shortfall; it must never
+  // correct for it. Rounds one to five all tried to reclaim that strip, and the
+  // last one "worked" only in the DOM: it reported a tab bar at 759 -> 852 while
+  // the device painted nothing past 793, because a black-translucent standalone
+  // web view is smaller than the screen and no CSS can paint outside it. The
+  // real fix is the status-bar-style meta. So: the class may land, and landing
+  // must change no geometry at all.
+  const marker = await page.evaluate(() => {
     const before = {
       cls: document.documentElement.classList.contains('ios-short-viewport'),
       px: getComputedStyle(document.documentElement).getPropertyValue('--ios-shortfall').trim(),
     }
+    const r = sel => document.querySelector(sel).getBoundingClientRect().bottom
+    const snap = () => ({
+      app: r('.mobile-app'),
+      tabbar: r('.mobile-tabbar'),
+      transform: getComputedStyle(document.querySelector('.mobile-root')).transform,
+    })
+    const off = snap()
     document.documentElement.classList.add('ios-short-viewport')
-    const r = el => document.querySelector(el).getBoundingClientRect()
-    const after = {
-      appBottom: r('.mobile-app').bottom,
-      tabbarBottom: r('.mobile-tabbar').bottom,
-      rootTransform: getComputedStyle(document.querySelector('.mobile-root')).transform,
-      viewportH: window.innerHeight,
-    }
+    const on = snap()
     document.documentElement.classList.remove('ios-short-viewport')
-    return { before, after }
+    return { before, off, on, viewportH: window.innerHeight }
   })
   check('No shortfall is measured in a browser that does not have the bug',
-    corrected.before.cls === false && corrected.before.px === '0px',
-    `class=${corrected.before.cls} var=${corrected.before.px}`)
-  check('With the correction engaged, .mobile-root becomes the fixed containing block',
-    corrected.after.rootTransform !== 'none', corrected.after.rootTransform)
-  check('...and the app box and tab bar are still flush with the window bottom',
-    Math.abs(corrected.after.appBottom - corrected.after.viewportH) < 1
-    && Math.abs(corrected.after.tabbarBottom - corrected.after.viewportH) < 1,
-    `app ${corrected.after.appBottom}, tabbar ${corrected.after.tabbarBottom}, window ${corrected.after.viewportH}`)
+    marker.before.cls === false && marker.before.px === '0px',
+    `class=${marker.before.cls} var=${marker.before.px}`)
+  check('.ios-short-viewport is a diagnostic marker and moves nothing',
+    marker.off.app === marker.on.app
+    && marker.off.tabbar === marker.on.tabbar
+    && marker.on.transform === 'none',
+    `app ${marker.off.app}->${marker.on.app}, tabbar ${marker.off.tabbar}->${marker.on.tabbar}, transform ${marker.on.transform}`)
+  check('...and the app box and tab bar stay flush with the window bottom',
+    Math.abs(marker.on.app - marker.viewportH) < 1 && Math.abs(marker.on.tabbar - marker.viewportH) < 1,
+    `app ${marker.on.app}, tabbar ${marker.on.tabbar}, window ${marker.viewportH}`)
 
   // Round four: the correction placed the tab bar correctly and then `overflow:
   // hidden` on the shell CLIPPED it — `overflow` on the root element propagates

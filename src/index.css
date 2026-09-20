@@ -82,28 +82,19 @@ html, body { height: 100%; }
   inset: 0;
 }
 
-/* ── the measured correction ───────────────────────────────
- * Belt and braces for the note above, because it has now been wrong twice and
- * neither wrong version could be caught from a laptop. `src/iosViewport.ts`
- * measures, ON THE DEVICE, how far the layout viewport falls short of the real
- * screen and publishes it here. If the fix above is sufficient the measurement
- * is 0, this class never lands, and none of the following applies.
+/* ── the shortfall is REPORTED, never corrected ──────────────────
+ * `src/iosViewport.ts` still measures how far the layout viewport falls short
+ * of the screen, and still publishes `--ios-shortfall` + `.ios-short-viewport`.
+ * **Nothing here acts on them.** They exist for the diagnostics panel.
  *
- * When it does land: `height: 100%` on a fixed element is 100% of the short
- * initial containing block, so adding the shortfall back gets the real screen.
- * `bottom: auto` because `inset: 0` would otherwise pin the height itself.
- *
- * And ONLY here does `.mobile-root` become the containing block for the phone's
- * fixed chrome. That transform is what the 2026-09-17 fix reached for, and on
- * its own it is harmful: with a short app box it drags the tab bar up off the
- * screen edge. Paired with a box we have measured to be the right height it is
- * the correct move, because in this state `bottom: 0` against the viewport is
- * short too. Conditional on the same class, so the two can never separate. */
-:root.ios-short-viewport #root {
-  bottom: auto;
-  height: calc(100% + var(--ios-shortfall, 0px));
-}
-:root.ios-short-viewport .mobile-root { transform: translateZ(0); }
+ * There was a rule here that added the shortfall back to `#root` and made
+ * `.mobile-root` the containing block for the fixed chrome. It is gone, because
+ * the shortfall is not a layout error to reclaim — it is the web view being
+ * smaller than the screen. Extending the app box past it does not win back
+ * pixels, it moves content OUT of the drawable area: the DOM reported the tab
+ * bar at 759→852 while the screen painted nothing past 793, so the labels were
+ * laid out correctly and simply never rendered. Whatever iOS does to the web
+ * view, the app's job is to fit inside it. */
 body {
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   background: var(--bg);
@@ -2726,9 +2717,9 @@ body {
  * same short initial containing block (see the note at the top of this file),
  * so the transform only dragged the tab bar 59px up off the screen edge and
  * left body's background showing beneath it. Nothing here may reintroduce a
- * transform, filter, perspective or will-change on `.app` / `.mobile-root`
- * unconditionally. The one sanctioned exception is `.ios-short-viewport`, at the
- * top of this file, where the app box has been measured on the device first. */
+ * transform, filter, perspective or will-change on `.app` / `.mobile-root`. There
+ * is no longer any exception: the `.ios-short-viewport` rule that used to be one
+ * is gone, for the reason given at the top of this file. */
 
 /* Standalone has no browser chrome above it — without this the title sits
    underneath the clock and the carrier bars. */

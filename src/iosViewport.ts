@@ -1,29 +1,26 @@
 /**
- * The installed-on-iOS bottom gap, measured instead of guessed.
+ * The installed-on-iOS bottom gap: measured, reported, and NOT corrected.
  *
- * Twice now this app has shipped a fix for the same symptom — the home-screen
- * web app stopping `safe-area-inset-top` (59px on a 15 Pro) above the screen
- * bottom, with body's `--bg` showing under the tab bar — and twice the fix
- * rested on a belief about which box WebKit hands out, with no way to check it
- * from a laptop. `100dvh` was going to be the honest height (it is not; it
- * measures the same short initial containing block). `position: fixed` was
- * going to reach the real window (sibling repo traction says it does, which is
- * why removing `user-scalable=no` — their one head-tag difference — is the
- * primary fix beside this file).
+ * Five rounds of CSS were spent trying to reclaim a strip of screen that was
+ * never this app's to paint. The readings that ended it (Nic's 15 Pro, Browse →
+ * Diagnostics, 2026-09-20): `screen` 852pt, but `innerHeight`,
+ * `visualViewport.height` and `documentElement.clientHeight` all 793. A
+ * `black-translucent` standalone web view is anchored at y=0 — correctly
+ * full-bleed under the Dynamic Island — and sized screen MINUS the status bar.
+ * The bottom 59pt belongs to the app window, not the document; the flat colour
+ * there is the manifest's `background_color`.
  *
- * This is the part that does not need either belief to be right. It measures
- * the shortfall on the actual device and publishes it as a CSS variable, and
- * index.css corrects the shell by exactly that much. When there is nothing to
- * correct it publishes zero and changes nothing, so it is inert everywhere the
- * bug is absent: desktop, Android, iOS Safari, and an iOS home-screen app on
- * whatever future WebKit stops doing this.
+ * ⚠️ So the shortfall is not a layout error, and extending the app box by it is
+ * actively harmful: the DOM then reports a tab bar at 759→852 while the screen
+ * paints nothing past 793, and the labels vanish while measuring as present.
+ * The real fix is in index.html — `apple-mobile-web-app-status-bar-style:
+ * black`, which makes iOS size the web view to reach the screen bottom.
  *
- * ⚠️ Deliberately narrow. `screen.height` is only trustworthy as "the height
- * the app really has" in an installed standalone app, which by definition owns
- * the whole screen. In Safari the same arithmetic would push the app under the
- * URL bar — the bug in reverse — so `navigator.standalone` gates everything,
- * and the result is clamped to the top inset so a wrong reading can never move
- * the app by more than the one offset this bug is made of.
+ * What survives here is the instrument, not the cure. `shortfallPx` detects the
+ * condition so `DiagnosticsPanel` can show it and flag the reading that
+ * disagrees with the others, and so the day iOS changes this again there is a
+ * number to look at rather than a theory to argue. Nothing in index.css acts on
+ * what this publishes.
  */
 
 export interface ViewportProbe {
@@ -80,8 +77,11 @@ function readTopInset(doc: Document): number {
 }
 
 /**
- * Measure once and write the result to `--ios-shortfall` + the
- * `.ios-short-viewport` class on `<html>`. Returns the px applied.
+ * Measure once and publish to `--ios-shortfall` + the `.ios-short-viewport`
+ * class on `<html>`. Returns the px measured.
+ *
+ * ⚠️ "Publish", not "apply": no stylesheet rule reads either of them. They are
+ * for the diagnostics panel. See the note at the top of this file.
  */
 export function applyViewportShortfall(win: Window = window): number {
   const doc = win.document
@@ -100,7 +100,8 @@ export function applyViewportShortfall(win: Window = window): number {
 }
 
 /**
- * Install the measurement and keep it current.
+ * Install the measurement and keep it current, so the diagnostics panel is
+ * never showing a stale reading after a rotation.
  *
  * ⚠️ Plain `addEventListener` with no React in sight, on purpose. See the
  * autosave / BackupsPanel notes in CLAUDE.md: an effect that registers a window

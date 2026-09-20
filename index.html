@@ -20,7 +20,29 @@
     <!-- Installed-app chrome: full-bleed on iOS, light status-bar glyphs. -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- ⚠️ `black-translucent` is what caused the bottom gap, and no CSS could fix
+         it. Measured on Nic's 15 Pro (Browse → Diagnostics, 2026-09-20): screen
+         852pt, but innerHeight = visualViewport = clientHeight = 793 — iOS
+         anchors a black-translucent standalone web view at y=0, full-bleed under
+         the Dynamic Island, and sizes it screen MINUS the status bar. The bottom
+         59pt of the screen is not part of the web view at all; the flat colour
+         there is the manifest's `background_color`. You cannot paint outside your
+         own web view, so five rounds of layout fixes were all unwinnable, and the
+         one that "worked" merely pushed the tab bar's labels off the drawable
+         area (DOM said the bar was 759→852; the screen painted nothing past 793).
+         `black` makes iOS place the web view BELOW the status bar instead: y=59,
+         height 793, bottom 852 — the real screen edge. The cost is no paint under
+         the Dynamic Island; the status bar strip goes black, which against this
+         app's #0a0a1a is close to invisible. viewport-fit=cover stays: the home
+         indicator and the landscape side insets still need paying back.
+         ⚠️ iOS reads these apple-mobile-web-app-* tags when the icon is ADDED to
+         the Home Screen. If the gap survives a force-quit, remove the icon and
+         re-add it — once.
+         (Sibling repo traction keeps black-translucent and does not show this. We
+         could not reproduce why from either repo's HTML; both have carried the
+         tag since their first PWA commit, so it is most likely an install-time
+         difference. Being right beats matching.) -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="adhdo" />
 
     <link rel="manifest" href="./manifest.webmanifest" />
