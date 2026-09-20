@@ -413,6 +413,35 @@ const closeSheet = async page => {
     `globs ${afterImport.globs.length}, imp1 ${afterImport.globs.some(g => g.id === 'imp1')}`)
   fs.rmSync(importPath, { force: true })
 
+  // Diagnostics: the panel that tells a stale bundle from a failed fix. Its
+  // build line is the whole point — four rounds of the iOS viewport bug could
+  // not answer "is the phone even running this?" from a screenshot.
+  await page.keyboard.press('Escape')   // the backups panel is still open
+  await page.waitForTimeout(250)
+  await page.locator('.mobile-browse-row', { hasText: 'Diagnostics' }).click()
+  await page.waitForTimeout(300)
+  check('Browse opens the diagnostics panel on mobile',
+    await page.locator('.diag-panel').isVisible())
+  const diag = await page.evaluate(() => Object.fromEntries(
+    [...document.querySelectorAll('.diag-row')].map(r => [
+      r.querySelector('.diag-key').textContent,
+      r.querySelector('.diag-val').textContent,
+    ])))
+  check('...and names the build it is running',
+    /\S+ \u00b7 \d{4}-\d{2}-\d{2}T/.test(diag.build ?? ''), diag.build)
+  check('...and reports the readings the fix turns on',
+    diag.standalone === 'false'
+    && diag['measured shortfall'] === '0px'
+    && diag['correction applied'] === 'false'
+    && (diag['overflow html / body / #root'] ?? '').split('/').every(v => !v.includes('hidden')),
+    JSON.stringify({ standalone: diag.standalone, shortfall: diag['measured shortfall'], overflow: diag['overflow html / body / #root'] }))
+  check('...and all four tab labels are accounted for',
+    !(diag['lowest tab label'] ?? '').includes('none'), diag['lowest tab label'])
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(250)
+  check('Esc closes the diagnostics panel',
+    !(await page.locator('.diag-panel').isVisible()))
+
   check('No console errors (mobile)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()
 }

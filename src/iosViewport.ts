@@ -117,3 +117,73 @@ export function watchViewportShortfall(win: Window = window): void {
   // launch, and a rotation reports its new size a beat after the event.
   win.setTimeout(measure, 300)
 }
+
+/** One labelled reading for the diagnostics panel. */
+export interface ViewportReading {
+  label: string
+  value: string
+  /** true when this reading is the one that does not agree with the others. */
+  flag?: boolean
+}
+
+/**
+ * Everything needed to tell a stale bundle from a failed fix, read live.
+ *
+ * This exists because four rounds of the installed-on-iOS viewport bug were
+ * argued from screenshots: a laptop cannot reproduce the short viewport, and an
+ * installed PWA that resumes rather than cold-launches can sit on old CSS
+ * indefinitely, which looks exactly like a fix that did not work. One
+ * screenshot of this panel settles both questions at once.
+ */
+export function viewportReadings(win: Window = window): ViewportReading[] {
+  const doc = win.document
+  const css = (el: Element | null, prop: string) =>
+    el ? win.getComputedStyle(el).getPropertyValue(prop).trim() : '—'
+  const rect = (sel: string) => {
+    const el = doc.querySelector(sel)
+    if (!el) return '—'
+    const r = el.getBoundingClientRect()
+    return `${Math.round(r.top)} → ${Math.round(r.bottom)}`
+  }
+  const root = doc.documentElement
+  const standalone =
+    (win.navigator as Navigator & { standalone?: boolean }).standalone === true
+  const clientH = root.clientHeight
+  const screenH = Math.max(win.screen?.width ?? 0, win.screen?.height ?? 0)
+  const shortfall = css(root, '--ios-shortfall') || '0px'
+  const applied = root.classList.contains('ios-short-viewport')
+
+  return [
+    { label: 'build', value: __BUILD_ID__ },
+    { label: 'standalone', value: String(standalone) },
+    { label: 'screen', value: `${win.screen?.width ?? 0} × ${win.screen?.height ?? 0}` },
+    { label: 'documentElement.clientHeight', value: String(clientH), flag: standalone && clientH < screenH },
+    { label: 'window.innerHeight', value: String(win.innerHeight) },
+    { label: 'visualViewport.height', value: String(Math.round(win.visualViewport?.height ?? 0)) },
+    { label: 'safe-area top / bottom', value: `${readTopInset(doc)} / ${readBottomInset(doc)}` },
+    { label: 'measured shortfall', value: shortfall },
+    { label: 'correction applied', value: String(applied) },
+    { label: 'overflow html / body / #root', value:
+        `${css(root, 'overflow')} / ${css(doc.body, 'overflow')} / ${css(doc.getElementById('root'), 'overflow')}` },
+    { label: '#root rect', value: rect('#root') },
+    { label: '.mobile-app rect', value: rect('.mobile-app') },
+    { label: '.mobile-tabbar rect', value: rect('.mobile-tabbar') },
+    { label: 'lowest tab label', value: (() => {
+      const labels = [...doc.querySelectorAll('.mobile-tab-label')]
+      if (!labels.length) return 'none rendered'
+      return `${Math.round(Math.max(...labels.map(l => l.getBoundingClientRect().bottom)))} of ${win.innerHeight}`
+    })() },
+  ]
+}
+
+/** Companion to readTopInset, for the report only. */
+function readBottomInset(doc: Document): number {
+  const probe = doc.createElement('div')
+  probe.style.cssText =
+    'position:fixed;top:0;left:0;width:0;visibility:hidden;pointer-events:none;' +
+    'height:env(safe-area-inset-bottom,0px)'
+  doc.body.appendChild(probe)
+  const px = probe.getBoundingClientRect().height
+  probe.remove()
+  return px
+}

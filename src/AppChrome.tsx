@@ -3,6 +3,7 @@ import type { KeyboardEvent, RefObject } from 'react'
 import type { User } from '@supabase/supabase-js'
 import type { GalaxyVersion } from './store'
 import type { VoiceCapture } from './useVoiceCapture'
+import { viewportReadings } from './iosViewport'
 
 export function HomeButton() {
   return (
@@ -228,6 +229,73 @@ function formatWhen(iso: string): string {
   const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
   if (days < 7) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
   return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${time}`
+}
+
+/**
+ * What the device actually reports, on screen.
+ *
+ * The installed-on-iOS viewport bug took four rounds partly because two very
+ * different failures look identical from a screenshot: a fix that did not work,
+ * and a fix the phone never loaded (a home-screen PWA that resumes rather than
+ * cold-launches does not re-navigate, so it can hold old CSS indefinitely). The
+ * build stamp at the top separates those two in one glance, and the readings
+ * below replace guessing at which box WebKit handed out.
+ *
+ * Mobile-only entry point, deliberately: unlike backups, these numbers describe
+ * the device you are holding, so "open it on whichever machine is to hand" is
+ * not a property worth having. The panel itself lives here in shared chrome so
+ * desktop can offer it the day that changes.
+ */
+export function DiagnosticsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+
+  // Esc, through a ref, depending only on `open` — same reasoning as
+  // BackupsPanel below (see CLAUDE.md on window listeners and the physics loop).
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose })
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') closeRef.current() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open])
+  useEffect(() => { if (!open) setCopied(false) }, [open])
+
+  if (!open) return null
+
+  // Read at render: these change with rotation, and a stale reading is worse
+  // than none when the whole point is to be believed.
+  const readings = viewportReadings()
+
+  const copy = () => {
+    const text = readings.map(r => `${r.label}: ${r.value}`).join('\n')
+    navigator.clipboard?.writeText(text).then(() => setCopied(true)).catch(() => {})
+  }
+
+  return (
+    <div className="diag-backdrop" onClick={onClose}>
+      <div className="diag-panel" onClick={e => e.stopPropagation()}>
+        <div className="diag-head">
+          <span className="diag-title">diagnostics</span>
+          <button className="diag-close" onClick={onClose} title="Close (Esc)">✕</button>
+        </div>
+        <p className="diag-note">
+          What this device reports. The build line says which bundle is running — if it
+          is older than the fix you are testing, the app is on a cached copy, not a
+          broken one.
+        </p>
+        <dl className="diag-rows">
+          {readings.map(r => (
+            <div className={`diag-row${r.flag ? ' is-flag' : ''}`} key={r.label}>
+              <dt className="diag-key">{r.label}</dt>
+              <dd className="diag-val">{r.value}</dd>
+            </div>
+          ))}
+        </dl>
+        <button className="diag-copy" onClick={copy}>{copied ? '✓ copied' : '⧉ copy all'}</button>
+      </div>
+    </div>
+  )
 }
 
 export function BackupsPanel({

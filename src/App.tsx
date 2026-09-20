@@ -7,7 +7,7 @@ import type { User } from '@supabase/supabase-js'
 import Galaxy from './Galaxy'
 import MobileApp from './MobileApp'
 import { useIsMobile } from './useIsMobile'
-import { AuthButton, BackupsPanel, CaptureBar, CloudIndicator, HomeButton, SaveIndicator, UndoRedoBar, VoiceOverlay } from './AppChrome'
+import { AuthButton, BackupsPanel, CaptureBar, CloudIndicator, DiagnosticsPanel, HomeButton, SaveIndicator, UndoRedoBar, VoiceOverlay } from './AppChrome'
 import { useVoiceCapture } from './useVoiceCapture'
 
 const MAX_UNDO = 40
@@ -25,6 +25,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'merged' | 'pulled' | 'error'>('idle')
   const [backupsOpen, setBackupsOpen] = useState(false)
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [versions, setVersions] = useState<GalaxyVersion[]>([])
   const [versionsLoading, setVersionsLoading] = useState(false)
 
@@ -1147,7 +1148,9 @@ export default function App() {
           onToggleAllTodosInGlobs={toggleAllTodosInGlobs}
           onDeleteGlobs={deleteGlobs}
           onOpenBackups={openBackups}
+          onOpenDiagnostics={() => setDiagnosticsOpen(true)}
         />
+        <DiagnosticsPanel open={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
         <BackupsPanel
           open={backupsOpen}
           user={user}
