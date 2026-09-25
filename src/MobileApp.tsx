@@ -1,36 +1,42 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import type { Cluster, GalaxyState, Glob, Priority } from './types'
 import type { VoiceCapture } from './useVoiceCapture'
 import { MicButton, VoiceOverlay } from './AppChrome'
 import { PALETTE } from './store'
-import { addDaysStr, formatDue, nextWeekdayStr, parseQuickAdd, todayStr } from './dates'
+import {
+  addDaysStr, dayKey, formatCaptureDay, formatClock, formatDue, nextWeekdayStr, parseQuickAdd, todayStr,
+} from './dates'
 import { buildAgenda } from './agenda'
 
-// ── Mobile view: Todoist-shaped ─────────────────────────────────────────────
-// The galaxy is a desktop instrument; on a phone adhdo runs a straight task
-// app modeled on Todoist. The vocabulary maps 1:1 onto the shared state:
+// ── Mobile: a capture pocket ────────────────────────────────────────────────
+// The phone has one job: a thought, idea, to-do or memory has to land within
+// about five seconds of arriving, or it is gone. Everything here is ordered by
+// that. (2026-09-25 — this replaced a week-long Todoist clone that had turned
+// the phone into a planner; see CLAUDE.md "Mobile".)
 //
-//   project        = cluster        (same records the galaxy renders as cards)
-//   Inbox          = unclustered globs
-//   task           = glob           (a glob with isTodo, or just a thought)
-//   due date       = glob.dueDate   (also visible on desktop as a chip)
-//   priority P1-P4 = glob.priority  (colors the checkbox on both layouts)
+//   · The capture bar is ALWAYS on screen, at the bottom, under the thumb. It
+//     sends on Enter, keeps focus for rapid fire, and says "caught" so you know
+//     it landed even when the thought isn't in view.
+//   · Thoughts (the landing page) is a journal of everything you've caught,
+//     newest first, grouped by day — never empty just because nothing is due.
+//     Anything due today or overdue is pinned above it.
+//   · Organizing is invited, never required: a "sort a few?" nudge walks the
+//     unsorted pile one thought at a time, and swipe-left files any row.
+//   · Clusters and Search are their own pages.
 //
-// Navigation is Todoist's: bottom tabs Today / Upcoming / Search / Browse,
-// projects drill in from Browse, a floating + opens quick add with
-// natural-language dates ("call mum tomorrow p2"). Capture stays king: the
-// quick-add sheet stays open for rapid entry and the mic FAB runs the same
-// hands-free dictation session as desktop.
+// Kept from the Todoist week because they earn their place: due dates (typed
+// in plain words — "call mum tomorrow"), swipe-right to finish, the tap-for-
+// details sheet. Gone: the Today/Upcoming tabs, the + button and its quick-add
+// sheet, priorities (desktop still sets them; the phone only shows the tint).
 
 interface Props {
   state: GalaxyState
   onboardingActive: boolean
   /** Owned by App so the mobile and desktop bars can't run two mic sessions. */
   voice: VoiceCapture
-  onAdd: (text: string) => void
   onAddTask: (text: string, opts?: { clusterId?: string | null; dueDate?: string | null; priority?: Priority }) => void
   onSetDueDate: (id: string, dueDate: string | null) => void
-  onSetPriority: (id: string, priority: Priority) => void
   onAddCluster: (name: string) => void
   onRecolorCluster: (id: string, color: string) => void
   onToggleDone: (id: string) => void
@@ -38,16 +44,15 @@ interface Props {
   onToggleFlag: (id: string) => void
   onUpdateText: (id: string, text: string) => void
   onDelete: (id: string) => void
-  onAddToCluster: (globId: string, clusterId: string) => void
-  onMoveGlobToCluster: (globId: string, targetClusterId: string) => void
   onRemoveFromCluster: (globId: string) => void
   onRenameCluster: (id: string, name: string) => void
   onToggleAllTodosInCluster: (id: string) => void
   onClearCompletedInCluster: (id: string) => void
   onDissolveCluster: (id: string) => void
   onDeleteCluster: (id: string) => void
-  // Bulk primitives, used by select mode. Each is ONE undo step.
+  // Bulk primitives. Each is ONE undo step, so undoing a mis-filed batch is one tap.
   onMoveGlobsToCluster: (ids: string[], clusterId: string) => void
+  onTransferToNewCluster: (ids: string[], name?: string) => void
   onToggleFlagGlobs: (ids: string[]) => void
   onToggleAllTodosInGlobs: (ids: string[]) => void
   onDeleteGlobs: (ids: string[]) => void
@@ -57,94 +62,139 @@ interface Props {
   onOpenDiagnostics: () => void
 }
 
-type Tab = 'today' | 'upcoming' | 'search' | 'browse'
+type Tab = 'thoughts' | 'clusters' | 'search'
 
-/** 'inbox' and 'flagged' are virtual projects; anything else is a cluster id. */
-type ProjectId = 'inbox' | 'flagged' | string
+const NAV: { id: Tab; label: string }[] = [
+  { id: 'thoughts', label: 'Thoughts' },
+  { id: 'clusters', label: 'Clusters' },
+  { id: 'search', label: 'Search' },
+]
+
+/** Inside the Clusters tab. 'unsorted' is the virtual pile of loose thoughts. */
+type ClusterView = 'unsorted' | string
 
 type Sheet =
-  | { kind: 'quickAdd' }
   | { kind: 'detail'; globId: string }
-  | { kind: 'schedule'; globId: string; back?: boolean }
-  | { kind: 'move'; globId: string; back?: boolean }
-  | { kind: 'projectMenu'; clusterId: string }
-  | { kind: 'projectColor'; clusterId: string }
+  | { kind: 'schedule'; globId: string }
+  | { kind: 'move'; globIds: string[]; fromDetail?: boolean; bulk?: boolean }
+  | { kind: 'newCluster'; globIds: string[]; bulk?: boolean }
+  | { kind: 'clusterMenu'; clusterId: string }
+  | { kind: 'clusterColor'; clusterId: string }
   | { kind: 'rename'; clusterId: string }
-  | { kind: 'newProject' }
-  | { kind: 'bulkMove' }
+  | { kind: 'sort'; ids: string[] }
   | null
 
-type Filter = 'all' | 'todo' | 'flagged' | 'done'
+type Filter = 'all' | 'todo' | 'dated' | 'flagged' | 'done'
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'todo', label: 'To-do' },
+  { id: 'dated', label: 'Dated' },
   { id: 'flagged', label: 'Flagged' },
   { id: 'done', label: 'Done' },
 ]
 
-const PRIORITIES: Priority[] = [1, 2, 3, 4]
+/**
+ * The "sort a few?" nudge appears once the pile reaches this size. Below it, a
+ * nudge after every single capture would be nagging, not nudging — and one or
+ * two loose thoughts are a swipe-left each anyway.
+ */
+const NUDGE_AT = 3
 
 export default function MobileApp(props: Props) {
   const { state, onboardingActive, voice, onOpenBackups, onOpenDiagnostics } = props
-  const [tab, setTabRaw] = useState<Tab>('today')
-  const [openProject, setOpenProject] = useState<ProjectId | null>(null)
+  const [tab, setTabRaw] = useState<Tab>('thoughts')
+  const [clusterView, setClusterView] = useState<ClusterView | null>(null)
   const [sheet, setSheet] = useState<Sheet>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   /** Non-null = select mode. Empty set is a valid (just-entered) state. */
   const [selected, setSelected] = useState<Set<string> | null>(null)
   const [showCompleted, setShowCompleted] = useState(false)
+  const listRef = useRef<HTMLDivElement>(null)
+  const captureRef = useRef<HTMLInputElement>(null)
 
   const selecting = selected !== null
   const selectedIds = useMemo(() => (selected ? [...selected] : []), [selected])
 
   const setTab = useCallback((t: Tab) => {
+    // Tapping the page you're already on means "take me to the top".
+    if (t === tab && !clusterView) listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
     setTabRaw(t)
-    setOpenProject(null)
+    setClusterView(null)
     setShowCompleted(false)
-  }, [])
+  }, [tab, clusterView])
+
+  // A new page starts at its top, not wherever the last one was scrolled to.
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = 0
+  }, [tab, clusterView])
+
+  // Capture is the whole job, so the cursor starts in the bar. iOS ignores a
+  // focus() no tap asked for — there this is a no-op and the bar is one tap
+  // away at the bottom. Elsewhere the keyboard is up before the thought escapes.
+  useEffect(() => { captureRef.current?.focus() }, [])
 
   const today = todayStr()
 
-  const globsById = useMemo(() => {
-    const m = new Map<string, Glob>()
-    for (const g of state.globs) m.set(g.id, g)
-    return m
-  }, [state.globs])
+  const globsById = useMemo(() => new Map(state.globs.map(g => [g.id, g])), [state.globs])
+  const clustersById = useMemo(() => new Map(state.clusters.map(c => [c.id, c])), [state.clusters])
+  const orphans = useMemo(() => state.clusters.find(c => c.role === 'orphans'), [state.clusters])
 
-  const clustersById = useMemo(() => {
-    const m = new Map<string, Cluster>()
-    for (const c of state.clusters) m.set(c.id, c)
-    return m
-  }, [state.clusters])
-
-  const inboxGlobs = useMemo(
+  const looseGlobs = useMemo(
     () => state.globs.filter(g => !g.clusterId).sort((a, b) => b.createdAt - a.createdAt),
     [state.globs],
   )
 
-  // Buckets come from the shared agenda so the desktop panel and these tabs
-  // can never disagree about what "due today" means.
-  const {
-    overdue,
-    today: dueToday,
-    upcoming: upcomingGroups,
-    todayCount,
-  } = useMemo(() => buildAgenda(state.globs, today), [state.globs, today])
+  // Pinned above the stream: what's due today or already late. The same
+  // buckets the desktop agenda uses, so the two can't disagree.
+  const agenda = useMemo(() => buildAgenda(state.globs, today), [state.globs, today])
+  const due = useMemo(() => [...agenda.overdue, ...agenda.today], [agenda])
 
-  const matches = useCallback((g: Glob) => {
-    if (filter === 'todo' && (!g.isTodo || g.done)) return false
-    if (filter === 'flagged' && !g.flagged) return false
-    if (filter === 'done' && !g.done) return false
+  // The stream: every thought, newest first, grouped by the day it was caught.
+  // Done ones stay, struck through — this is a record of you, not a queue.
+  // Anything pinned in Due is left out while it's pinned: the same row twice on
+  // one screen reads as a glitch. Tick it off and it drops back into its day.
+  const stream = useMemo(() => {
+    const pinned = new Set(due.map(g => g.id))
+    const days: { key: string; items: Glob[] }[] = []
+    for (const g of [...state.globs].sort((a, b) => b.createdAt - a.createdAt)) {
+      if (pinned.has(g.id)) continue
+      const key = dayKey(g.createdAt)
+      const last = days[days.length - 1]
+      if (last && last.key === key) last.items.push(g)
+      else days.push({ key, items: [g] })
+    }
+    return days
+  }, [state.globs, due])
+
+  // What "sort a few?" walks through: loose thoughts newest first (freshest in
+  // your head, so easiest to decide), then whatever the weekly sweep filed into
+  // orphans — which is just "unsorted" that got old. The sweep and the nudge
+  // work together: nothing escapes the pile by ageing out of it.
+  const sortQueue = useMemo(() => {
+    const loose = looseGlobs.filter(g => !g.done)
+    const swept = orphans
+      ? orphans.globIds.map(id => globsById.get(id)).filter((g): g is Glob => !!g && !g.done)
+      : []
+    return [...loose, ...swept].map(g => g.id)
+  }, [looseGlobs, orphans, globsById])
+
+  const searchResults = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return q ? g.text.toLowerCase().includes(q) : true
-  }, [filter, query])
-
-  const searchResults = useMemo(
-    () => state.globs.filter(matches).sort((a, b) => b.createdAt - a.createdAt),
-    [state.globs, matches],
-  )
+    const hits = state.globs.filter(g => {
+      if (filter === 'todo' && (!g.isTodo || g.done)) return false
+      if (filter === 'dated' && (!g.dueDate || g.done)) return false
+      if (filter === 'flagged' && !g.flagged) return false
+      if (filter === 'done' && !g.done) return false
+      return q ? g.text.toLowerCase().includes(q) : true
+    })
+    // "Dated" is what the Upcoming tab used to be: soonest first.
+    if (filter === 'dated') {
+      return hits.sort((a, b) => (a.dueDate as string).localeCompare(b.dueDate as string))
+    }
+    return hits.sort((a, b) => b.createdAt - a.createdAt)
+  }, [state.globs, query, filter])
 
   // ── select mode ────────────────────────────────────────────────────────────
   const toggleSelect = useCallback((id: string) => {
@@ -159,121 +209,190 @@ export default function MobileApp(props: Props) {
     setSelected(prev => (prev ? prev : new Set([id])))
   }, [])
   const endSelect = useCallback(() => setSelected(null), [])
-  // A bulk action consumes the selection; leaving select mode on is just a trap
-  // for the next tap.
+  // A bulk action consumes the selection; leaving select mode on is a trap.
   const bulk = (fn: () => void) => () => { fn(); endSelect(); setSheet(null) }
 
-  // The "New thought" home-screen shortcut: straight into quick add.
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('capture')) {
-      setSheet({ kind: 'quickAdd' })
-    }
-  }, [])
-
-  // Quick add pre-targets the project being looked at.
-  const quickAddProject = openProject && openProject !== 'inbox' && openProject !== 'flagged'
-    ? openProject
-    : null
-
-  const detailGlob = sheet?.kind === 'detail' ? globsById.get(sheet.globId) : undefined
-  // Sheets and the open project point at live records; a delete, undo, or sync
+  // Sheets and the open cluster point at live records; a delete, undo or sync
   // underneath them must close the view rather than render a ghost.
   useEffect(() => {
     if (!sheet) return
-    const globGone = (sheet.kind === 'detail' || sheet.kind === 'schedule' || sheet.kind === 'move')
-      && !globsById.has(sheet.globId)
-    const clusterGone = (sheet.kind === 'projectMenu' || sheet.kind === 'projectColor' || sheet.kind === 'rename')
+    const globGone = (sheet.kind === 'detail' || sheet.kind === 'schedule') && !globsById.has(sheet.globId)
+    const clusterGone = (sheet.kind === 'clusterMenu' || sheet.kind === 'clusterColor' || sheet.kind === 'rename')
       && !clustersById.has(sheet.clusterId)
     if (globGone || clusterGone) setSheet(null)
   }, [sheet, globsById, clustersById])
   useEffect(() => {
-    if (openProject && openProject !== 'inbox' && openProject !== 'flagged' && !clustersById.has(openProject)) {
-      setOpenProject(null)
-    }
-  }, [openProject, clustersById])
+    if (clusterView && clusterView !== 'unsorted' && !clustersById.has(clusterView)) setClusterView(null)
+  }, [clusterView, clustersById])
 
-  const rowProps = (showProject: boolean) => ({
-    selecting,
-    selectedSet: selected,
-    showProject,
-    clustersById,
-    onToggleDone: props.onToggleDone,
-    onOpen: (id: string) => setSheet({ kind: 'detail', globId: id }),
-    onSchedule: (id: string) => setSheet({ kind: 'schedule', globId: id }),
-    onLongPress: beginSelect,
-    onToggleSelect: toggleSelect,
-  })
+  // Inside a cluster, the bar captures INTO it — that's the cluster page's "add".
+  const captureTarget = tab === 'clusters' && clusterView && clusterView !== 'unsorted'
+    ? clustersById.get(clusterView)
+    : undefined
 
-  // ── the four tabs ──────────────────────────────────────────────────────────
+  const row = (g: Glob, showCluster = true) => (
+    <ThoughtRow
+      key={g.id}
+      glob={g}
+      selecting={selecting}
+      selected={!!selected?.has(g.id)}
+      cluster={showCluster && g.clusterId ? clustersById.get(g.clusterId) : undefined}
+      onToggleDone={props.onToggleDone}
+      onOpen={id => setSheet({ kind: 'detail', globId: id })}
+      onFile={id => setSheet({ kind: 'move', globIds: [id] })}
+      onLongPress={beginSelect}
+      onToggleSelect={toggleSelect}
+    />
+  )
 
-  const renderToday = () => {
-    const now = new Date()
-    const sub = `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][now.getDay()]} ${now.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][now.getMonth()]}`
+  // ── pages ──────────────────────────────────────────────────────────────────
+
+  const renderThoughts = () => (
+    <>
+      {state.globs.length === 0 && (
+        <div className="mobile-empty">
+          <div className="mobile-empty-emoji">🧠</div>
+          <p className="mobile-empty-title">Empty headspace.</p>
+          <p className="mobile-empty-sub">
+            Type below and hit send — or tap the mic and just talk. Every thought
+            lands here. Say “tomorrow” or “friday” and it gets a date.
+          </p>
+        </div>
+      )}
+
+      {due.length > 0 && (
+        <section className="mobile-group">
+          <div className="mobile-group-head is-due">
+            Due<span className="mobile-group-count">{due.length}</span>
+          </div>
+          {due.map(g => row(g))}
+        </section>
+      )}
+
+      {sortQueue.length >= NUDGE_AT && (
+        <button className="mobile-nudge" onClick={() => setSheet({ kind: 'sort', ids: sortQueue })}>
+          <span className="mobile-nudge-ico" aria-hidden="true">🌀</span>
+          <span className="mobile-nudge-text"><b>{sortQueue.length} unsorted</b> — sort a few?</span>
+          <ChevronIcon />
+        </button>
+      )}
+
+      {stream.map(day => (
+        <section className="mobile-group" key={day.key}>
+          <div className="mobile-day-head">{formatCaptureDay(day.key)}</div>
+          {day.items.map(g => row(g))}
+        </section>
+      ))}
+    </>
+  )
+
+  const renderClusterGrid = () => {
+    const unsortedOpen = looseGlobs.filter(g => !g.done)
     return (
       <>
-        <ViewHead title="Today" sub={sub} />
-        {onboardingActive && (
-          <div className="mobile-empty">
-            <div className="mobile-empty-emoji">🧠</div>
-            <p className="mobile-empty-title">Empty headspace.</p>
-            <p className="mobile-empty-sub">
-              Tap <b>+</b> and dump a thought — type “tomorrow” or “p1” and it schedules
-              itself. Or hit the mic and just talk.
-            </p>
-          </div>
-        )}
-        {overdue.length > 0 && (
-          <section className="mobile-group">
-            <div className="mobile-group-head is-overdue">Overdue<span className="mobile-group-count">{overdue.length}</span></div>
-            {overdue.map(g => <TaskRow key={g.id} glob={g} {...rowProps(true)} />)}
-          </section>
-        )}
-        <section className="mobile-group">
-          {overdue.length > 0 && (
-            <div className="mobile-group-head">Today<span className="mobile-group-count">{dueToday.length}</span></div>
-          )}
-          {dueToday.map(g => <TaskRow key={g.id} glob={g} {...rowProps(true)} />)}
-          {todayCount === 0 && !onboardingActive && (
-            <div className="mobile-clear-state">
-              <div className="mobile-empty-emoji">🌌</div>
-              <p className="mobile-empty-title">Nothing due today.</p>
-              <p className="mobile-empty-sub">Schedule a task and it shows up here.</p>
-            </div>
-          )}
+        <div className="mobile-cluster-grid">
+          <button className="mobile-cluster-card is-unsorted" onClick={() => setClusterView('unsorted')}>
+            <span className="mobile-cluster-card-name">📥 Unsorted</span>
+            <span className="mobile-cluster-card-meta">
+              {unsortedOpen.length === 0 ? 'all filed ✨' : `${unsortedOpen.length} waiting for a home`}
+            </span>
+            {unsortedOpen[0] && <span className="mobile-cluster-card-peek">{unsortedOpen[0].text}</span>}
+          </button>
+
+          {state.clusters.map(c => {
+            const items = c.globIds.map(id => globsById.get(id)).filter((g): g is Glob => !!g)
+            const open = items.filter(g => !g.done)
+            const done = items.length - open.length
+            const latest = [...open].sort((a, b) => b.createdAt - a.createdAt)[0]
+            return (
+              <button
+                key={c.id}
+                className="mobile-cluster-card"
+                style={{ ['--cluster-color' as string]: c.color }}
+                onClick={() => setClusterView(c.id)}
+              >
+                <span className="mobile-cluster-card-name">{c.name}</span>
+                <span className="mobile-cluster-card-meta">
+                  {open.length === 0 && done === 0 ? 'empty' : `${open.length} open${done ? ` · ${done} done` : ''}`}
+                </span>
+                {latest && <span className="mobile-cluster-card-peek">{latest.text}</span>}
+              </button>
+            )
+          })}
+
+          <button className="mobile-cluster-card is-add" onClick={() => setSheet({ kind: 'newCluster', globIds: [] })}>
+            <span className="mobile-cluster-card-name">＋ New cluster</span>
+          </button>
+        </div>
+
+        <section className="mobile-group is-quiet">
+          <button className="mobile-quiet-row" onClick={onOpenBackups}>
+            <span aria-hidden="true">🛟</span> Backups &amp; history <ChevronIcon />
+          </button>
+          <button className="mobile-quiet-row" onClick={onOpenDiagnostics}>
+            <span aria-hidden="true">📐</span> Diagnostics <ChevronIcon />
+          </button>
         </section>
       </>
     )
   }
 
-  const renderUpcoming = () => (
-    <>
-      <ViewHead title="Upcoming" />
-      {upcomingGroups.length === 0 ? (
-        <div className="mobile-clear-state">
-          <div className="mobile-empty-emoji">🗓️</div>
-          <p className="mobile-empty-title">Nothing scheduled ahead.</p>
-          <p className="mobile-empty-sub">Give a task a date — swipe one left, or type “friday” in quick add.</p>
+  const renderClusterView = (id: ClusterView) => {
+    const cluster = id === 'unsorted' ? undefined : clustersById.get(id)
+    // Deleted out from under us (undo, sync) — the effect above pops the view.
+    if (id !== 'unsorted' && !cluster) return null
+    const all = cluster
+      ? cluster.globIds.map(gid => globsById.get(gid)).filter((g): g is Glob => !!g)
+      : looseGlobs
+    const active = all.filter(g => !g.done)
+    const completed = all.filter(g => g.done)
+
+    return (
+      <>
+        <div className="mobile-view-head">
+          <button className="mobile-back-btn" onClick={() => setClusterView(null)} aria-label="Back to clusters">
+            <BackIcon />
+          </button>
+          {cluster
+            ? <span className="mobile-cluster-dot big" style={{ background: cluster.color }} />
+            : <span aria-hidden="true">📥</span>}
+          <span className="mobile-view-title">{cluster ? cluster.name : 'Unsorted'}</span>
+          {cluster ? (
+            <button
+              className="mobile-menu-btn"
+              aria-label="Cluster actions"
+              onClick={() => setSheet({ kind: 'clusterMenu', clusterId: cluster.id })}
+            >
+              <DotsIcon />
+            </button>
+          ) : sortQueue.length > 0 && (
+            <button className="mobile-head-link" onClick={() => setSheet({ kind: 'sort', ids: sortQueue })}>
+              Sort
+            </button>
+          )}
         </div>
-      ) : upcomingGroups.map(group => {
-        const due = formatDue(group.date)
-        const d = group.date.split('-')
-        return (
-          <section className="mobile-group" key={group.date}>
-            <div className="mobile-group-head">
-              {due.label}
-              <span className="mobile-group-date">{`${Number(d[2])}/${Number(d[1])}`}</span>
-              <span className="mobile-group-count">{group.items.length}</span>
-            </div>
-            {group.items.map(g => <TaskRow key={g.id} glob={g} {...rowProps(true)} />)}
+        <section className="mobile-group">
+          {active.map(g => row(g, false))}
+          {active.length === 0 && (
+            <p className="mobile-no-results">
+              {cluster ? 'Nothing open in here — type below to add to it.' : 'Nothing unsorted. Everything has a home. ✨'}
+            </p>
+          )}
+        </section>
+        {completed.length > 0 && (
+          <section className="mobile-group">
+            <button className="mobile-completed-toggle" onClick={() => setShowCompleted(v => !v)}>
+              <ChevronIcon open={showCompleted} /> Done <span className="mobile-group-count">{completed.length}</span>
+            </button>
+            {showCompleted && completed.map(g => row(g, false))}
           </section>
-        )
-      })}
-    </>
-  )
+        )}
+      </>
+    )
+  }
 
   const renderSearch = () => (
     <>
-      <ViewHead title="Search" />
       <div className="mobile-tools">
         <div className="mobile-search">
           <SearchIcon />
@@ -285,6 +404,9 @@ export default function MobileApp(props: Props) {
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
+            // You tapped Search to type, and that tap is what lets iOS raise
+            // the keyboard for it.
+            autoFocus
           />
           {query && (
             <button className="mobile-search-clear" onClick={() => setQuery('')} aria-label="Clear search">×</button>
@@ -303,158 +425,51 @@ export default function MobileApp(props: Props) {
         </div>
       </div>
       <section className="mobile-group">
-        {searchResults.length === 0 ? (
-          <p className="mobile-no-results">Nothing matches that.</p>
-        ) : searchResults.map(g => <TaskRow key={g.id} glob={g} {...rowProps(true)} />)}
+        {searchResults.length === 0
+          ? <p className="mobile-no-results">Nothing matches that.</p>
+          : searchResults.map(g => row(g))}
       </section>
     </>
   )
 
-  const renderBrowse = () => (
-    <>
-      <ViewHead title="Browse" />
-      <section className="mobile-group">
-        <button className="mobile-browse-row" onClick={() => setOpenProject('inbox')}>
-          <span className="mobile-browse-ico">📥</span>
-          <span className="mobile-browse-name">Inbox</span>
-          <span className="mobile-browse-count">{inboxGlobs.length}</span>
-          <ChevronIcon />
-        </button>
-        <button className="mobile-browse-row" onClick={() => setOpenProject('flagged')}>
-          <span className="mobile-browse-ico">🚩</span>
-          <span className="mobile-browse-name">Flagged</span>
-          <span className="mobile-browse-count">{state.globs.filter(g => g.flagged).length}</span>
-          <ChevronIcon />
-        </button>
-      </section>
-      <section className="mobile-group">
-        <div className="mobile-group-head">My Projects<span className="mobile-group-count">{state.clusters.length}</span></div>
-        {state.clusters.map(c => (
-          <button className="mobile-browse-row" key={c.id} onClick={() => setOpenProject(c.id)}>
-            <span className="mobile-proj-dot" style={{ background: c.color }} />
-            <span className="mobile-browse-name">{c.name}</span>
-            <span className="mobile-browse-count">{c.globIds.length}</span>
-            <ChevronIcon />
-          </button>
-        ))}
-        <button className="mobile-browse-row is-add" onClick={() => setSheet({ kind: 'newProject' })}>
-          <span className="mobile-browse-ico">＋</span>
-          <span className="mobile-browse-name">Add project</span>
-        </button>
-      </section>
-      <section className="mobile-group">
-        <button className="mobile-browse-row" onClick={onOpenBackups}>
-          <span className="mobile-browse-ico">🛟</span>
-          <span className="mobile-browse-name">Backups &amp; history</span>
-          <ChevronIcon />
-        </button>
-        <button className="mobile-browse-row" onClick={onOpenDiagnostics}>
-          <span className="mobile-browse-ico">📐</span>
-          <span className="mobile-browse-name">Diagnostics</span>
-          <ChevronIcon />
-        </button>
-      </section>
-    </>
-  )
-
-  const renderProject = (pid: ProjectId) => {
-    const cluster = pid !== 'inbox' && pid !== 'flagged' ? clustersById.get(pid) : undefined
-    // Deleted out from under us (undo, sync) — the effect above pops the view.
-    if (pid !== 'inbox' && pid !== 'flagged' && !cluster) return null
-    const all: Glob[] = pid === 'inbox'
-      ? inboxGlobs
-      : pid === 'flagged'
-        ? state.globs.filter(g => g.flagged).sort((a, b) => b.createdAt - a.createdAt)
-        : cluster!.globIds.map(id => globsById.get(id)).filter((g): g is Glob => !!g)
-    const active = all.filter(g => !g.done)
-    const completed = all.filter(g => g.done)
-    const title = pid === 'inbox' ? 'Inbox' : pid === 'flagged' ? 'Flagged' : cluster!.name
-
-    return (
-      <>
-        <div className="mobile-proj-head">
-          <button className="mobile-back-btn" onClick={() => setOpenProject(null)} aria-label="Back">
-            <BackIcon />
-          </button>
-          {cluster && <span className="mobile-proj-dot big" style={{ background: cluster.color }} />}
-          <span className="mobile-proj-title">{title}</span>
-          {cluster && (
-            <button
-              className="mobile-menu-btn"
-              aria-label="Project actions"
-              onClick={() => setSheet({ kind: 'projectMenu', clusterId: cluster.id })}
-            >
-              <DotsIcon />
-            </button>
-          )}
-        </div>
-        <section className="mobile-group">
-          {active.map(g => <TaskRow key={g.id} glob={g} {...rowProps(pid === 'flagged')} />)}
-          {all.length === 0 && (
-            <p className="mobile-no-results">
-              {pid === 'inbox' ? 'Inbox zero. Everything’s filed. 🎉' : 'Nothing in here yet.'}
-            </p>
-          )}
-          {pid !== 'flagged' && (
-            <button className="mobile-addtask-row" onClick={() => setSheet({ kind: 'quickAdd' })}>
-              <span className="mobile-addtask-plus">＋</span> Add task
-            </button>
-          )}
-        </section>
-        {completed.length > 0 && (
-          <section className="mobile-group">
-            <button className="mobile-completed-toggle" onClick={() => setShowCompleted(v => !v)}>
-              <ChevronIcon open={showCompleted} /> Completed <span className="mobile-group-count">{completed.length}</span>
-            </button>
-            {showCompleted && completed.map(g => <TaskRow key={g.id} glob={g} {...rowProps(pid === 'flagged')} />)}
-          </section>
-        )}
-      </>
-    )
-  }
+  const detailGlob = sheet?.kind === 'detail' ? globsById.get(sheet.globId) : undefined
 
   return (
     <div className={`mobile-app ${selecting ? 'selecting' : ''} ${voice.status === 'listening' ? 'listening' : ''}`}>
-      {selecting && (
+      {selecting ? (
         <header className="mobile-head select">
           <button className="mobile-head-btn" onClick={endSelect}>Cancel</button>
           <span className="mobile-select-count">{selectedIds.length} selected</span>
-          <button
-            className="mobile-head-btn"
-            onClick={() => setSelected(new Set(state.globs.map(g => g.id)))}
-          >
+          <button className="mobile-head-btn" onClick={() => setSelected(new Set(state.globs.map(g => g.id)))}>
             All
           </button>
         </header>
+      ) : (
+        <header className="mobile-head">
+          <nav className="mobile-nav" aria-label="Pages">
+            {NAV.map(n => (
+              <button
+                key={n.id}
+                className={`mobile-nav-btn ${tab === n.id ? 'on' : ''}`}
+                aria-current={tab === n.id ? 'page' : undefined}
+                onClick={() => setTab(n.id)}
+              >
+                <span className="mobile-nav-label">{n.label}</span>
+              </button>
+            ))}
+          </nav>
+        </header>
       )}
 
-      <div className="mobile-list">
-        {openProject
-          ? renderProject(openProject)
-          : tab === 'today' ? renderToday()
-          : tab === 'upcoming' ? renderUpcoming()
-          : tab === 'search' ? renderSearch()
-          : renderBrowse()}
-        {/* spacer so the last row clears the tab bar + FAB */}
+      <div className="mobile-list" ref={listRef}>
+        {tab === 'thoughts' && renderThoughts()}
+        {tab === 'clusters' && (clusterView ? renderClusterView(clusterView) : renderClusterGrid())}
+        {tab === 'search' && renderSearch()}
+        {/* spacer so the last row clears the capture bar */}
         <div className="mobile-list-pad" />
       </div>
 
       <VoiceOverlay voice={voice} />
-
-      {!selecting && (
-        <div className="mobile-fab-stack">
-          {voice.supported && <MicButton voice={voice} />}
-          <button
-            className="mobile-fab"
-            aria-label="Add task"
-            onClick={() => setSheet({ kind: 'quickAdd' })}
-          >
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
-        </div>
-      )}
 
       {selecting ? (
         <div className="bulk-bar">
@@ -475,9 +490,9 @@ export default function MobileApp(props: Props) {
           <button
             className="bulk-btn primary"
             disabled={selectedIds.length === 0}
-            onClick={() => setSheet({ kind: 'bulkMove' })}
+            onClick={() => setSheet({ kind: 'move', globIds: selectedIds, bulk: true })}
           >
-            Move…
+            File…
           </button>
           <button
             className="bulk-btn danger"
@@ -488,28 +503,20 @@ export default function MobileApp(props: Props) {
           </button>
         </div>
       ) : (
-        <nav className="mobile-tabbar">
-          <TabButton id="today" label="Today" active={tab === 'today' && !openProject} badge={todayCount} onPress={setTab}>
-            <TodayIcon />
-          </TabButton>
-          <TabButton id="upcoming" label="Upcoming" active={tab === 'upcoming' && !openProject} onPress={setTab}>
-            <CalendarIcon />
-          </TabButton>
-          <TabButton id="search" label="Search" active={tab === 'search' && !openProject} onPress={setTab}>
-            <SearchIcon size={20} />
-          </TabButton>
-          <TabButton id="browse" label="Browse" active={tab === 'browse' || !!openProject} onPress={setTab}>
-            <BrowseIcon />
-          </TabButton>
-        </nav>
-      )}
-
-      {sheet?.kind === 'quickAdd' && (
-        <QuickAddSheet
-          clusters={state.clusters}
-          defaultClusterId={quickAddProject}
-          onSubmit={(text, opts) => props.onAddTask(text, opts)}
-          onClose={() => setSheet(null)}
+        <CaptureDock
+          inputRef={captureRef}
+          voice={voice}
+          target={captureTarget}
+          placeholder={
+            captureTarget ? `add to ${captureTarget.name}…`
+              : onboardingActive ? 'type a thought, hit send…'
+              : 'brain dump here…'
+          }
+          onSubmit={(text, dueDate) => {
+            props.onAddTask(text, { clusterId: captureTarget?.id ?? null, dueDate })
+            // On the stream the new thought appears at the top — go and meet it.
+            if (tab === 'thoughts') listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+          }}
         />
       )}
 
@@ -521,9 +528,8 @@ export default function MobileApp(props: Props) {
           onToggleDone={props.onToggleDone}
           onToggleTodo={props.onToggleTodo}
           onToggleFlag={props.onToggleFlag}
-          onSetPriority={props.onSetPriority}
-          onOpenSchedule={() => setSheet({ kind: 'schedule', globId: detailGlob.id, back: true })}
-          onOpenMove={() => setSheet({ kind: 'move', globId: detailGlob.id, back: true })}
+          onOpenSchedule={() => setSheet({ kind: 'schedule', globId: detailGlob.id })}
+          onOpenMove={() => setSheet({ kind: 'move', globIds: [detailGlob.id], fromDetail: true })}
           onDelete={() => { props.onDelete(detailGlob.id); setSheet(null) }}
           onClose={() => setSheet(null)}
         />
@@ -532,92 +538,105 @@ export default function MobileApp(props: Props) {
       {sheet?.kind === 'schedule' && (() => {
         const g = globsById.get(sheet.globId)
         if (!g) return null
-        const done = () => setSheet(sheet.back ? { kind: 'detail', globId: g.id } : null)
+        const back = () => setSheet({ kind: 'detail', globId: g.id })
+        return <ScheduleSheet glob={g} onPick={date => { props.onSetDueDate(g.id, date); back() }} onClose={back} />
+      })()}
+
+      {sheet?.kind === 'move' && (() => {
+        const globs = sheet.globIds.map(id => globsById.get(id)).filter((g): g is Glob => !!g)
+        if (globs.length === 0) return null
+        const leave = () => setSheet(sheet.fromDetail ? { kind: 'detail', globId: sheet.globIds[0] } : null)
+        const finish = () => { if (sheet.bulk) endSelect(); leave() }
+        const single = globs.length === 1 ? globs[0] : undefined
         return (
-          <ScheduleSheet
-            glob={g}
-            onPick={date => { props.onSetDueDate(g.id, date); done() }}
-            onClose={done}
+          <ActionSheet
+            title={single ? `File “${single.text}” into…` : `File ${globs.length} thoughts into…`}
+            onClose={leave}
+            rows={[
+              ...(globs.some(g => g.clusterId)
+                ? [{
+                    label: '📥 Unsorted',
+                    onClick: () => { globs.forEach(g => { if (g.clusterId) props.onRemoveFromCluster(g.id) }); finish() },
+                  }]
+                : []),
+              ...state.clusters
+                .filter(c => !single || c.id !== single.clusterId)
+                .map(c => ({
+                  label: c.name,
+                  dot: c.color,
+                  onClick: () => { props.onMoveGlobsToCluster(sheet.globIds, c.id); finish() },
+                })),
+              {
+                label: '＋ New cluster…',
+                onClick: () => setSheet({ kind: 'newCluster', globIds: sheet.globIds, bulk: sheet.bulk }),
+              },
+            ]}
           />
         )
       })()}
 
-      {sheet?.kind === 'move' && (() => {
-        const g = globsById.get(sheet.globId)
-        if (!g) return null
-        const done = () => setSheet(sheet.back ? { kind: 'detail', globId: g.id } : null)
-        return (
-          <ActionSheet title="Move to…" onClose={done} rows={[
-            ...(g.clusterId ? [{ label: '📥 Inbox', onClick: () => { props.onRemoveFromCluster(g.id); done() } }] : []),
-            ...state.clusters.filter(c => c.id !== g.clusterId).map(c => ({
-              label: c.name,
-              dot: c.color,
-              onClick: () => {
-                if (g.clusterId) props.onMoveGlobToCluster(g.id, c.id)
-                else props.onAddToCluster(g.id, c.id)
-                done()
-              },
-            })),
-          ]} />
-        )
-      })()}
-
-      {sheet?.kind === 'bulkMove' && (
-        <ActionSheet
-          title={`Move ${selectedIds.length} thought${selectedIds.length === 1 ? '' : 's'} to…`}
+      {sheet?.kind === 'newCluster' && (
+        <TextPromptSheet
+          title={sheet.globIds.length
+            ? `New cluster for ${sheet.globIds.length === 1 ? 'this thought' : `${sheet.globIds.length} thoughts`}`
+            : 'New cluster'}
+          initial=""
+          placeholder="name it…"
+          submitLabel="Create"
+          onSubmit={name => {
+            if (sheet.globIds.length) props.onTransferToNewCluster(sheet.globIds, name || 'new cluster')
+            else if (name) props.onAddCluster(name)
+            if (sheet.bulk) endSelect()
+            setSheet(null)
+          }}
           onClose={() => setSheet(null)}
-          rows={state.clusters.map(c => ({
-            label: c.name,
-            dot: c.color,
-            onClick: bulk(() => props.onMoveGlobsToCluster(selectedIds, c.id)),
-          }))}
         />
       )}
 
-      {sheet?.kind === 'projectMenu' && (() => {
+      {sheet?.kind === 'clusterMenu' && (() => {
         const c = clustersById.get(sheet.clusterId)
         if (!c) return null
         const items = c.globIds.map(id => globsById.get(id)).filter((g): g is Glob => !!g)
-        const completedCount = items.filter(g => g.isTodo && g.done).length
+        const doneCount = items.filter(g => g.isTodo && g.done).length
         const allAreTodos = items.length > 0 && items.every(g => g.isTodo)
         return (
           <ActionSheet title={c.name} onClose={() => setSheet(null)} rows={[
             { label: '✏️ Rename', onClick: () => setSheet({ kind: 'rename', clusterId: c.id }) },
-            { label: '🎨 Color', onClick: () => setSheet({ kind: 'projectColor', clusterId: c.id }) },
+            { label: '🎨 Color', onClick: () => setSheet({ kind: 'clusterColor', clusterId: c.id }) },
             {
-              label: allAreTodos ? '☑️ Remove all to-dos' : '☐ Convert all to to-dos',
+              label: allAreTodos ? '💭 Make them all plain thoughts' : '☑️ Make them all to-dos',
               disabled: items.length === 0,
               onClick: () => { props.onToggleAllTodosInCluster(c.id); setSheet(null) },
             },
             {
-              label: `🧹 Clear completed${completedCount ? ` (${completedCount})` : ''}`,
-              disabled: completedCount === 0,
+              label: `🧹 Clear done${doneCount ? ` (${doneCount})` : ''}`,
+              disabled: doneCount === 0,
               onClick: () => { props.onClearCompletedInCluster(c.id); setSheet(null) },
             },
             {
-              label: '💨 Delete project, keep thoughts',
-              onClick: () => { props.onDissolveCluster(c.id); setSheet(null); setOpenProject(null) },
+              label: '💨 Ungroup — keep the thoughts',
+              onClick: () => { props.onDissolveCluster(c.id); setSheet(null); setClusterView(null) },
             },
             {
-              label: '🗑️ Delete project + thoughts',
+              label: '🗑️ Delete cluster + thoughts',
               danger: true,
               onClick: () => {
-                c.globIds.forEach(id => props.onDelete(id))
+                if (c.globIds.length) props.onDeleteGlobs(c.globIds)
                 props.onDeleteCluster(c.id)
                 setSheet(null)
-                setOpenProject(null)
+                setClusterView(null)
               },
             },
           ]} />
         )
       })()}
 
-      {sheet?.kind === 'projectColor' && (() => {
+      {sheet?.kind === 'clusterColor' && (() => {
         const c = clustersById.get(sheet.clusterId)
         if (!c) return null
         return (
           <SheetShell onClose={() => setSheet(null)}>
-            <div className="mobile-sheet-title">Project color</div>
+            <div className="mobile-sheet-title">Cluster color</div>
             <div className="mobile-swatch-grid">
               {PALETTE.map(color => (
                 <button
@@ -638,7 +657,7 @@ export default function MobileApp(props: Props) {
         if (!c) return null
         return (
           <TextPromptSheet
-            title="Rename project"
+            title="Rename cluster"
             initial={c.name}
             submitLabel="Rename"
             onSubmit={name => { props.onRenameCluster(c.id, name || c.name); setSheet(null) }}
@@ -647,13 +666,15 @@ export default function MobileApp(props: Props) {
         )
       })()}
 
-      {sheet?.kind === 'newProject' && (
-        <TextPromptSheet
-          title="New project"
-          initial=""
-          placeholder="project name…"
-          submitLabel="Create"
-          onSubmit={name => { if (name) props.onAddCluster(name); setSheet(null) }}
+      {sheet?.kind === 'sort' && (
+        <SortSheet
+          ids={sheet.ids}
+          globsById={globsById}
+          clusters={state.clusters.filter(c => c.role !== 'orphans')}
+          onFile={(id, clusterId) => props.onMoveGlobsToCluster([id], clusterId)}
+          onNewCluster={(id, name) => props.onTransferToNewCluster([id], name)}
+          onDone={id => props.onToggleDone(id)}
+          onDelete={id => props.onDelete(id)}
           onClose={() => setSheet(null)}
         />
       )}
@@ -661,70 +682,136 @@ export default function MobileApp(props: Props) {
   )
 }
 
-// ── view chrome ──────────────────────────────────────────────────────────────
+// ── the capture bar ──────────────────────────────────────────────────────────
 
-function ViewHead({ title, sub }: { title: string; sub?: string }) {
+function CaptureDock({
+  inputRef,
+  voice,
+  target,
+  placeholder,
+  onSubmit,
+}: {
+  inputRef: RefObject<HTMLInputElement | null>
+  voice: VoiceCapture
+  /** Set inside a cluster page: captures land there instead of Unsorted. */
+  target: Cluster | undefined
+  placeholder: string
+  onSubmit: (text: string, dueDate: string | null) => void
+}) {
+  const [text, setText] = useState('')
+  /** The user tapped the date chip away: keep "tomorrow" as words, no date. */
+  const [keepDateWord, setKeepDateWord] = useState(false)
+  const [flash, setFlash] = useState<string | null>(null)
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => () => clearTimeout(flashTimer.current), [])
+
+  // Dates only. "p2" stays in the text: the phone never shows priority, and a
+  // word that silently vanishes from what you typed is a small betrayal.
+  const parsed = useMemo(() => parseQuickAdd(text, { priority: false }), [text])
+  const dueDate = keepDateWord ? null : parsed.dueDate
+
+  const submit = () => {
+    const body = keepDateWord ? text.trim() : parsed.text
+    if (!body) return
+    onSubmit(body, dueDate)
+    setText('')
+    setKeepDateWord(false)
+    // Say it landed. From Search, or scrolled down, the new thought isn't in
+    // view — and not knowing whether it saved is its own kind of lost.
+    setFlash(target ? `caught → ${target.name}` : 'caught')
+    clearTimeout(flashTimer.current)
+    flashTimer.current = setTimeout(() => setFlash(null), 1400)
+    inputRef.current?.focus()
+  }
+
+  // Tapping a button would blur the input and drop the keyboard mid-flurry.
+  const keepFocus = (e: React.MouseEvent) => e.preventDefault()
+
   return (
-    <div className="mobile-view-head">
-      <h1 className="mobile-big-title">{title}</h1>
-      {sub && <span className="mobile-view-sub">{sub}</span>}
+    <div className="mobile-capture">
+      {/* Always rendered: a chip appearing mid-sentence must not shove the input
+          up under your thumb. Undo docks at its right end (see index.css). */}
+      <div className="mobile-capture-chips">
+          {flash ? (
+            <span className="mobile-capture-flash">✓ {flash}</span>
+          ) : (
+            <>
+              {target && (
+                <span className="mobile-capture-target">
+                  <span className="mobile-cluster-dot" style={{ background: target.color }} />
+                  {target.name}
+                </span>
+              )}
+              {dueDate && (
+                <button
+                  className="mobile-capture-date"
+                  aria-label="Don't schedule it — keep the words"
+                  onMouseDown={keepFocus}
+                  onClick={() => setKeepDateWord(true)}
+                >
+                  <CalendarIcon size={12} /> {formatDue(dueDate).label} <span aria-hidden="true">✕</span>
+                </button>
+              )}
+            </>
+          )}
+      </div>
+      <div className="mobile-capture-row">
+        {voice.supported && <MicButton voice={voice} />}
+        <input
+          ref={inputRef}
+          type="text"
+          className="mobile-capture-input"
+          placeholder={placeholder}
+          value={text}
+          enterKeyHint="send"
+          autoComplete="off"
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') submit() }}
+        />
+        <button
+          className="mobile-capture-send"
+          aria-label="Catch it"
+          disabled={!text.trim()}
+          onMouseDown={keepFocus}
+          onClick={submit}
+        >
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="12" y1="19" x2="12" y2="5" />
+            <polyline points="5 12 12 5 19 12" />
+          </svg>
+        </button>
+      </div>
     </div>
   )
 }
 
-function TabButton({
-  id,
-  label,
-  active,
-  badge,
-  onPress,
-  children,
-}: {
-  id: Tab
-  label: string
-  active: boolean
-  badge?: number
-  onPress: (t: Tab) => void
-  children: React.ReactNode
-}) {
-  return (
-    <button className={`mobile-tab ${active ? 'on' : ''}`} onClick={() => onPress(id)}>
-      <span className="mobile-tab-ico">
-        {children}
-        {badge ? <span className="mobile-tab-badge">{badge > 99 ? '99+' : badge}</span> : null}
-      </span>
-      <span className="mobile-tab-label">{label}</span>
-    </button>
-  )
-}
-
-// ── a single task row ────────────────────────────────────────────────────────
+// ── a single thought row ─────────────────────────────────────────────────────
 
 /** Horizontal travel before a swipe commits. */
 const SWIPE_AT = 88
 /** Hold this long without moving to enter select mode. */
 const LONG_PRESS_MS = 450
 
-function TaskRow({
+function ThoughtRow({
   glob,
   selecting,
-  selectedSet,
-  showProject,
-  clustersById,
+  selected,
+  cluster,
   onToggleDone,
   onOpen,
-  onSchedule,
+  onFile,
   onLongPress,
   onToggleSelect,
 }: {
   glob: Glob
   selecting: boolean
-  selectedSet: Set<string> | null
-  showProject: boolean
-  clustersById: Map<string, Cluster>
+  selected: boolean
+  /** Passed only where the row isn't already inside its cluster's page. */
+  cluster: Cluster | undefined
   onToggleDone: (id: string) => void
   onOpen: (id: string) => void
-  onSchedule: (id: string) => void
+  onFile: (id: string) => void
   onLongPress: (id: string) => void
   onToggleSelect: (id: string) => void
 }) {
@@ -737,10 +824,7 @@ function TaskRow({
   /** Set when a gesture happened, so the trailing click doesn't also fire. */
   const consumed = useRef(false)
 
-  const selected = !!selectedSet?.has(glob.id)
-  const prio = glob.priority ?? 4
   const due = glob.dueDate ? formatDue(glob.dueDate) : null
-  const cluster = showProject && glob.clusterId ? clustersById.get(glob.clusterId) : undefined
 
   const clearTimer = () => { clearTimeout(timer.current); timer.current = undefined }
 
@@ -784,10 +868,10 @@ function TaskRow({
 
   const onPointerUp = () => {
     clearTimer()
-    if (axis.current === 'swipe') {
-      // Todoist's grammar: right = done, left = pick a date.
+    if (axis.current === 'swipe' && !selecting) {
+      // Right = done. Left = file it somewhere — the gentle nudge, one flick.
       if (dx >= SWIPE_AT) onToggleDone(glob.id)
-      else if (dx <= -SWIPE_AT) onSchedule(glob.id)
+      else if (dx <= -SWIPE_AT) onFile(glob.id)
     }
     start.current = null
     axis.current = 'undecided'
@@ -796,18 +880,13 @@ function TaskRow({
 
   useEffect(() => clearTimer, [])
 
-  const activate = () => {
-    if (selecting) onToggleSelect(glob.id)
-    else onOpen(glob.id)
-  }
-
   return (
     <div className={`mobile-task-wrap ${dx !== 0 ? 'swiping' : ''}`}>
       <div className={`mobile-task-under complete ${dx >= SWIPE_AT ? 'armed' : ''}`} aria-hidden="true">
-        <CheckIcon /> Done
+        <CheckIcon /> {glob.done ? 'Undo' : 'Done'}
       </div>
-      <div className={`mobile-task-under schedule ${dx <= -SWIPE_AT ? 'armed' : ''}`} aria-hidden="true">
-        <CalendarIcon size={16} /> Schedule
+      <div className={`mobile-task-under file ${dx <= -SWIPE_AT ? 'armed' : ''}`} aria-hidden="true">
+        File <FolderIcon />
       </div>
       <div
         className={`mobile-task ${glob.done ? 'done' : ''} ${selected ? 'selected' : ''}`}
@@ -825,7 +904,7 @@ function TaskRow({
             consumed.current = false
           }
         }}
-        onClick={activate}
+        onClick={() => (selecting ? onToggleSelect(glob.id) : onOpen(glob.id))}
       >
         {selecting ? (
           <button
@@ -837,7 +916,8 @@ function TaskRow({
           </button>
         ) : (
           <button
-            className={`mobile-check p${prio} ${glob.done ? 'done' : ''} ${glob.isTodo ? 'todo' : ''}`}
+            // The priority tint comes from the desktop; the phone shows it, never sets it.
+            className={`mobile-check p${glob.priority ?? 4} ${glob.done ? 'done' : ''} ${glob.isTodo ? 'todo' : ''}`}
             aria-label={glob.done ? 'Mark not done' : 'Mark done'}
             onClick={e => { e.stopPropagation(); onToggleDone(glob.id) }}
           >
@@ -846,14 +926,16 @@ function TaskRow({
         )}
         <div className="mobile-task-body">
           <span className="mobile-task-text">{glob.text}</span>
-          {(due || cluster || glob.flagged) && (
+          {((due && !glob.done) || cluster || glob.flagged) && (
             <span className="mobile-task-meta">
-              {due && <span className={`due-chip ${due.tone}`}><CalendarIcon size={11} />{due.label}</span>}
+              {due && !glob.done && (
+                <span className={`due-chip ${due.tone}`}><CalendarIcon size={10} />{due.label}</span>
+              )}
               {glob.flagged && <span className="mobile-task-flag">🚩</span>}
               {cluster && (
                 <span className="mobile-task-proj">
+                  <span className="mobile-cluster-dot" style={{ background: cluster.color }} />
                   {cluster.name}
-                  <span className="mobile-proj-dot" style={{ background: cluster.color }} />
                 </span>
               )}
             </span>
@@ -864,135 +946,106 @@ function TaskRow({
   )
 }
 
-// ── quick add ────────────────────────────────────────────────────────────────
+// ── sort a few: the nudge, one thought at a time ─────────────────────────────
 
-function QuickAddSheet({
+function SortSheet({
+  ids,
+  globsById,
   clusters,
-  defaultClusterId,
-  onSubmit,
+  onFile,
+  onNewCluster,
+  onDone,
+  onDelete,
   onClose,
 }: {
+  /** Snapshotted when the sheet opened, so filing one doesn't reshuffle the rest. */
+  ids: string[]
+  globsById: Map<string, Glob>
   clusters: Cluster[]
-  defaultClusterId: string | null
-  onSubmit: (text: string, opts: { clusterId: string | null; dueDate: string | null; priority: Priority }) => void
+  onFile: (id: string, clusterId: string) => void
+  onNewCluster: (id: string, name: string) => void
+  onDone: (id: string) => void
+  onDelete: (id: string) => void
   onClose: () => void
 }) {
-  const [text, setText] = useState('')
-  // Explicit chip choices override anything parsed out of the text.
-  const [dueDate, setDueDate] = useState<string | null>(null)
-  const [priority, setPriority] = useState<Priority | null>(null)
-  const [clusterId, setClusterId] = useState<string | null>(defaultClusterId)
-  const [picker, setPicker] = useState<'date' | 'priority' | 'project' | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const [i, setI] = useState(0)
+  const [naming, setNaming] = useState(false)
 
-  useEffect(() => { inputRef.current?.focus() }, [])
-
-  const parsed = useMemo(() => parseQuickAdd(text), [text])
-  const effDue = dueDate ?? parsed.dueDate
-  const effPrio: Priority = priority ?? parsed.priority ?? 4
-  const cluster = clusterId ? clusters.find(c => c.id === clusterId) : undefined
-  const dueLabel = effDue ? formatDue(effDue).label : 'Date'
-
-  const submit = () => {
-    if (!parsed.text) return
-    onSubmit(parsed.text, { clusterId, dueDate: effDue, priority: effPrio })
-    // Stay open, keep the target project: rapid-fire capture is the point.
-    setText('')
-    setDueDate(null)
-    setPriority(null)
-    inputRef.current?.focus()
-  }
+  // Skip anything that vanished under us (deleted elsewhere, undo, sync).
+  let idx = i
+  while (idx < ids.length && !globsById.has(ids[idx])) idx++
+  const g = idx < ids.length ? globsById.get(ids[idx]) : undefined
+  const next = () => { setNaming(false); setI(idx + 1) }
 
   return (
-    <SheetShell onClose={onClose} className="mobile-qa">
-      <input
-        ref={inputRef}
-        className="mobile-qa-input"
-        placeholder="e.g. water the ficus tomorrow p2"
-        value={text}
-        enterKeyHint="send"
-        onChange={e => setText(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') submit() }}
-      />
-      {picker === 'date' && (
-        <div className="mobile-qa-picker">
-          <button className="mobile-qa-opt" onClick={() => { setDueDate(todayStr()); setPicker(null) }}>Today</button>
-          <button className="mobile-qa-opt" onClick={() => { setDueDate(addDaysStr(todayStr(), 1)); setPicker(null) }}>Tomorrow</button>
-          <button className="mobile-qa-opt" onClick={() => { setDueDate(nextWeekdayStr(6)); setPicker(null) }}>Weekend</button>
-          <button className="mobile-qa-opt" onClick={() => { setDueDate(nextWeekdayStr(1)); setPicker(null) }}>Next week</button>
-          <label className="mobile-qa-opt">
-            Pick…
-            <input
-              type="date"
-              className="mobile-date-input"
-              onChange={e => { if (e.target.value) { setDueDate(e.target.value); setPicker(null) } }}
-            />
-          </label>
-          <button className="mobile-qa-opt" onClick={() => { setDueDate(null); setPicker(null) }}>Clear</button>
-        </div>
-      )}
-      {picker === 'priority' && (
-        <div className="mobile-qa-picker">
-          {PRIORITIES.map(p => (
-            <button
-              key={p}
-              className={`mobile-qa-opt prio p${p} ${effPrio === p ? 'on' : ''}`}
-              onClick={() => { setPriority(p); setPicker(null) }}
-            >
-              <FlagIcon /> {p === 4 ? 'None' : `P${p}`}
+    <SheetShell onClose={onClose} className="mobile-sort">
+      {g ? (
+        <>
+          <div className="mobile-sort-top">
+            <span className="mobile-sort-progress">{idx + 1} of {ids.length}</span>
+            <button className="mobile-head-link" onClick={onClose}>Enough for now</button>
+          </div>
+          <p className="mobile-sort-text">{g.text}</p>
+          <div className="mobile-sort-when">
+            caught {formatCaptureDay(dayKey(g.createdAt)).toLowerCase()}
+            {g.clusterId ? ' · swept into orphans' : ''}
+          </div>
+
+          <div className="mobile-sort-label">file into</div>
+          <div className="mobile-sort-chips">
+            {clusters.map(c => (
+              <button
+                key={c.id}
+                className="mobile-sort-chip"
+                style={{ ['--cluster-color' as string]: c.color }}
+                onClick={() => { onFile(g.id, c.id); next() }}
+              >
+                <span className="mobile-cluster-dot" style={{ background: c.color }} />
+                {c.name}
+              </button>
+            ))}
+            {naming ? (
+              <input
+                className="mobile-sort-new"
+                autoFocus
+                placeholder="new cluster name…"
+                enterKeyHint="done"
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    onNewCluster(g.id, e.currentTarget.value.trim() || 'new cluster')
+                    next()
+                  }
+                  if (e.key === 'Escape') setNaming(false)
+                }}
+              />
+            ) : (
+              <button className="mobile-sort-chip is-new" onClick={() => setNaming(true)}>＋ new</button>
+            )}
+          </div>
+
+          <div className="mobile-sort-actions">
+            <button className="mobile-sort-act is-danger" onClick={() => { onDelete(g.id); next() }}>
+              <TrashIcon /> Delete
             </button>
-          ))}
-        </div>
-      )}
-      {picker === 'project' && (
-        <div className="mobile-qa-picker">
-          <button className={`mobile-qa-opt ${!clusterId ? 'on' : ''}`} onClick={() => { setClusterId(null); setPicker(null) }}>
-            📥 Inbox
-          </button>
-          {clusters.map(c => (
-            <button
-              key={c.id}
-              className={`mobile-qa-opt ${clusterId === c.id ? 'on' : ''}`}
-              onClick={() => { setClusterId(c.id); setPicker(null) }}
-            >
-              <span className="mobile-proj-dot" style={{ background: c.color }} /> {c.name}
+            <button className="mobile-sort-act" onClick={() => { onDone(g.id); next() }}>
+              <CheckIcon /> Done
             </button>
-          ))}
+            <button className="mobile-sort-act is-skip" onClick={next}>Skip →</button>
+          </div>
+        </>
+      ) : (
+        <div className="mobile-sort-finished">
+          <div className="mobile-empty-emoji">✨</div>
+          <p className="mobile-empty-title">That's the pile.</p>
+          <p className="mobile-empty-sub">Everything you looked at has a home. Go do something fun.</p>
+          <button className="mobile-prompt-btn primary" onClick={onClose}>Close</button>
         </div>
       )}
-      <div className="mobile-qa-chips">
-        <button
-          className={`mobile-qa-chip ${effDue ? 'set' : ''}`}
-          onClick={() => setPicker(p => p === 'date' ? null : 'date')}
-        >
-          <CalendarIcon size={13} /> {dueLabel}
-        </button>
-        <button
-          className={`mobile-qa-chip prio p${effPrio} ${effPrio < 4 ? 'set' : ''}`}
-          onClick={() => setPicker(p => p === 'priority' ? null : 'priority')}
-        >
-          <FlagIcon /> {effPrio < 4 ? `P${effPrio}` : 'Priority'}
-        </button>
-        <button
-          className={`mobile-qa-chip ${clusterId ? 'set' : ''}`}
-          onClick={() => setPicker(p => p === 'project' ? null : 'project')}
-        >
-          {cluster
-            ? <><span className="mobile-proj-dot" style={{ background: cluster.color }} />{cluster.name}</>
-            : <>📥 Inbox</>}
-        </button>
-        <button className="mobile-qa-send" onClick={submit} disabled={!parsed.text} aria-label="Add task">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="19" x2="12" y2="5" />
-            <polyline points="5 12 12 5 19 12" />
-          </svg>
-        </button>
-      </div>
     </SheetShell>
   )
 }
 
-// ── task detail ──────────────────────────────────────────────────────────────
+// ── thought detail ───────────────────────────────────────────────────────────
 
 function DetailSheet({
   glob,
@@ -1001,7 +1054,6 @@ function DetailSheet({
   onToggleDone,
   onToggleTodo,
   onToggleFlag,
-  onSetPriority,
   onOpenSchedule,
   onOpenMove,
   onDelete,
@@ -1013,19 +1065,17 @@ function DetailSheet({
   onToggleDone: (id: string) => void
   onToggleTodo: (id: string) => void
   onToggleFlag: (id: string) => void
-  onSetPriority: (id: string, p: Priority) => void
   onOpenSchedule: () => void
   onOpenMove: () => void
   onDelete: () => void
   onClose: () => void
 }) {
   const due = glob.dueDate ? formatDue(glob.dueDate) : null
-  const prio = glob.priority ?? 4
   return (
     <SheetShell onClose={onClose} className="mobile-detail">
       <div className="mobile-detail-top">
         <button
-          className={`mobile-check p${prio} ${glob.done ? 'done' : ''} ${glob.isTodo ? 'todo' : ''}`}
+          className={`mobile-check p${glob.priority ?? 4} ${glob.done ? 'done' : ''} ${glob.isTodo ? 'todo' : ''}`}
           aria-label={glob.done ? 'Mark not done' : 'Mark done'}
           onClick={() => onToggleDone(glob.id)}
         >
@@ -1037,11 +1087,16 @@ function DetailSheet({
           onCommit={t => { const v = t.trim(); if (v && v !== glob.text) onUpdateText(glob.id, v) }}
         />
       </div>
+      <div className="mobile-detail-when">
+        caught {formatCaptureDay(dayKey(glob.createdAt)).toLowerCase()} at {formatClock(glob.createdAt)}
+      </div>
       <div className="mobile-detail-rows">
         <button className="mobile-detail-row" onClick={onOpenMove}>
-          <span className="mobile-detail-ico">{cluster ? <span className="mobile-proj-dot" style={{ background: cluster.color }} /> : '📥'}</span>
-          <span className="mobile-detail-label">Project</span>
-          <span className="mobile-detail-value">{cluster ? cluster.name : 'Inbox'}</span>
+          <span className="mobile-detail-ico">
+            {cluster ? <span className="mobile-cluster-dot" style={{ background: cluster.color }} /> : '📥'}
+          </span>
+          <span className="mobile-detail-label">Cluster</span>
+          <span className="mobile-detail-value">{cluster ? cluster.name : 'Unsorted'}</span>
           <ChevronIcon />
         </button>
         <button className="mobile-detail-row" onClick={onOpenSchedule}>
@@ -1050,22 +1105,6 @@ function DetailSheet({
           <span className={`mobile-detail-value ${due ? `due-${due.tone}` : ''}`}>{due ? due.label : 'None'}</span>
           <ChevronIcon />
         </button>
-        <div className="mobile-detail-row static">
-          <span className="mobile-detail-ico"><FlagIcon /></span>
-          <span className="mobile-detail-label">Priority</span>
-          <span className="mobile-prio-picker">
-            {PRIORITIES.map(p => (
-              <button
-                key={p}
-                className={`mobile-prio-btn p${p} ${prio === p ? 'on' : ''}`}
-                aria-label={p === 4 ? 'No priority' : `Priority ${p}`}
-                onClick={() => onSetPriority(glob.id, p)}
-              >
-                {p === 4 ? '–' : `P${p}`}
-              </button>
-            ))}
-          </span>
-        </div>
         <button className="mobile-detail-row" onClick={() => onToggleFlag(glob.id)}>
           <span className="mobile-detail-ico">🚩</span>
           <span className="mobile-detail-label">Flag</span>
@@ -1160,7 +1199,7 @@ function ActionSheet({
             disabled={r.disabled}
             onClick={r.onClick}
           >
-            {r.dot && <span className="mobile-proj-dot" style={{ background: r.dot }} />}
+            {r.dot && <span className="mobile-cluster-dot" style={{ background: r.dot }} />}
             {r.label}
           </button>
         ))}
@@ -1196,7 +1235,7 @@ function TextPromptSheet({
       <div className="mobile-sheet-title">{title}</div>
       <input
         ref={ref}
-        className="mobile-qa-input"
+        className="mobile-prompt-input"
         defaultValue={initial}
         placeholder={placeholder}
         enterKeyHint="done"
@@ -1258,7 +1297,7 @@ function DotsIcon() {
 
 function CheckIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <polyline points="20 6 9 17 4 12" />
     </svg>
   )
@@ -1266,16 +1305,24 @@ function CheckIcon() {
 
 function TrashIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <polyline points="3 6 5 6 21 6" />
       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
     </svg>
   )
 }
 
-function SearchIcon({ size = 15 }: { size?: number }) {
+function FolderIcon() {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  )
+}
+
+function SearchIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
       <circle cx="11" cy="11" r="7" /><line x1="16.5" y1="16.5" x2="21" y2="21" />
     </svg>
   )
@@ -1302,17 +1349,6 @@ function BackIcon() {
   )
 }
 
-function TodayIcon() {
-  const day = new Date().getDate()
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-      <rect x="3" y="5" width="18" height="16" rx="3" />
-      <line x1="3" y1="9.5" x2="21" y2="9.5" />
-      <text x="12" y="18.5" textAnchor="middle" fontSize="8.5" fill="currentColor" stroke="none" fontWeight="700">{day}</text>
-    </svg>
-  )
-}
-
 function CalendarIcon({ size = 20 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
@@ -1320,25 +1356,6 @@ function CalendarIcon({ size = 20 }: { size?: number }) {
       <line x1="3" y1="9.5" x2="21" y2="9.5" />
       <line x1="8" y1="2.5" x2="8" y2="6.5" />
       <line x1="16" y1="2.5" x2="16" y2="6.5" />
-    </svg>
-  )
-}
-
-function BrowseIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-      <line x1="4" y1="7" x2="20" y2="7" />
-      <line x1="4" y1="12" x2="20" y2="12" />
-      <line x1="4" y1="17" x2="14" y2="17" />
-    </svg>
-  )
-}
-
-function FlagIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
-      <line x1="4" y1="22" x2="4" y2="15" />
     </svg>
   )
 }

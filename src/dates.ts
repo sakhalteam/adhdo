@@ -92,12 +92,17 @@ const DATE_TOKENS: { re: RegExp; resolve: () => string }[] = [
 
 const PRIORITY_TOKEN = /\bp([1-4])\b/i
 
-export function parseQuickAdd(raw: string): QuickAddParse {
+/**
+ * `priority: false` leaves "p1"–"p4" in the text. The phone passes it: it is a
+ * capture pocket, not a planner, and a token that silently vanishes from what
+ * you typed — into a field the phone never shows — is the opposite of that.
+ */
+export function parseQuickAdd(raw: string, opts: { priority?: boolean } = {}): QuickAddParse {
   let text = raw
   let dueDate: string | null = null
   let priority: Priority | null = null
 
-  const pm = text.match(PRIORITY_TOKEN)
+  const pm = opts.priority === false ? null : text.match(PRIORITY_TOKEN)
   if (pm) {
     priority = Number(pm[1]) as Priority
     text = text.replace(PRIORITY_TOKEN, ' ')
@@ -110,4 +115,33 @@ export function parseQuickAdd(raw: string): QuickAddParse {
     }
   }
   return { text: text.replace(/\s+/g, ' ').trim(), dueDate, priority }
+}
+
+// ── capture days ─────────────────────────────────────────────────────────────
+// The phone's stream reads like a journal: thoughts grouped by the day they were
+// caught. Backward-looking, unlike formatDue — "Yesterday", a weekday for the
+// last week, then a plain date.
+
+const WEEKDAYS_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+/** Local 'YYYY-MM-DD' of a timestamp — the key the stream groups by. */
+export function dayKey(ts: number): string {
+  return toStr(new Date(ts))
+}
+
+export function formatCaptureDay(key: string): string {
+  const diff = daysFromToday(key)
+  if (diff === 0) return 'Today'
+  if (diff === -1) return 'Yesterday'
+  const d = parseDay(key)
+  if (diff > -7 && diff < 0) return WEEKDAYS_LONG[d.getDay()]
+  const year = d.getFullYear() === new Date().getFullYear() ? '' : ` ${d.getFullYear()}`
+  return `${WEEKDAYS_SHORT[d.getDay()]} ${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}${year}`
+}
+
+/** "3:42 pm" — for the detail sheet's "caught at" line. */
+export function formatClock(ts: number): string {
+  const d = new Date(ts)
+  const h = d.getHours()
+  return `${h % 12 || 12}:${pad(d.getMinutes())} ${h < 12 ? 'am' : 'pm'}`
 }

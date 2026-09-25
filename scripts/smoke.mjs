@@ -2,8 +2,9 @@
  * Functional smoke test against the running dev server: node scripts/smoke.mjs
  * Needs a driver first: npm i --no-save playwright-core
  *
- * Mobile is the Todoist-shaped app (tabs, quick add, swipe gestures); desktop
- * is the galaxy plus the due-date/priority reflection.
+ * Mobile is the capture pocket (persistent capture bar, journal stream,
+ * Clusters + Search pages, swipe gestures); desktop is the galaxy plus the
+ * due-date/priority reflection and the agenda dock.
  */
 import { chromium } from 'playwright-core'
 import fs from 'node:fs'
@@ -92,19 +93,52 @@ const closeSheet = async page => {
 }
 
 // ── mobile ────────────────────────────────────────────────────────────────
+// The capture pocket: a persistent bar at the bottom, a journal-style stream,
+// Clusters and Search as their own pages. See src/MobileApp.tsx.
 {
   const { ctx, page, errors } = await session({ width: 390, height: 844 }, true)
+
+  /** Bring a row to mid-screen, clear of the header and the capture bar. */
+  const centre = async loc => {
+    await loc.evaluate(el => el.scrollIntoView({ block: 'center' }))
+    await page.waitForTimeout(150)
+    return loc.boundingBox()
+  }
+  const swipe = async (loc, dx) => {
+    const b = await centre(loc)
+    const y = b.y + b.height / 2
+    const x0 = dx > 0 ? b.x + 40 : b.x + b.width - 40
+    await page.mouse.move(x0, y)
+    await page.mouse.down()
+    for (let i = 1; i <= 10; i++) await page.mouse.move(x0 + (dx * i) / 10, y)
+    await page.mouse.up()
+    await page.waitForTimeout(400)
+  }
+  const longPress = async loc => {
+    const b = await centre(loc)
+    await page.mouse.move(b.x + 140, b.y + b.height / 2)
+    await page.mouse.down()
+    await page.waitForTimeout(700)
+    await page.mouse.up()
+    await page.waitForTimeout(250)
+  }
+  const row = text => page.locator('.mobile-task', { hasText: text })
+  const capture = page.locator('.mobile-capture-input')
+  const catchIt = async text => {
+    await capture.fill(text)
+    await capture.press('Enter')
+    await page.waitForTimeout(250)
+  }
 
   // 0. The shell reaches the bottom of the window.
   //    Installed on iOS, `height: 100%` / `100vh` / `100dvh` all resolve against
   //    an initial containing block that is `safe-area-inset-top` SHORT, so the
-  //    app box stopped 59px above the screen edge and body's background showed
-  //    through under the tab bar. `position: fixed` measures the real window
-  //    instead, so `#root` is fixed — and a transform on `.app`/`.mobile-root`
-  //    would make it the containing block for the fixed chrome and put the tab
-  //    bar right back in the short box. A desktop browser cannot reproduce the
-  //    short ICB, so assert the two structural facts the fix rests on, plus the
-  //    flush geometry that must hold everywhere.
+  //    app box stopped 59px above the screen edge. `position: fixed` measures
+  //    the real window instead, so `#root` is fixed — and a transform on
+  //    `.app`/`.mobile-root` would make it the containing block for the fixed
+  //    chrome and put the capture bar right back in the short box. A desktop
+  //    browser cannot reproduce the short ICB, so assert the structural facts
+  //    the fix rests on, plus the flush geometry that must hold everywhere.
   const shell = await page.evaluate(() => {
     const cs = el => getComputedStyle(el)
     const bottom = sel => document.querySelector(sel).getBoundingClientRect().bottom
@@ -114,7 +148,7 @@ const closeSheet = async page => {
       appTransform: cs(document.querySelector('.app')).transform,
       viewportH: window.innerHeight,
       appBottom: bottom('.mobile-app'),
-      tabbarBottom: bottom('.mobile-tabbar'),
+      captureBottom: bottom('.mobile-capture'),
     }
   })
   check('#root is fixed, so the shell measures the window not the short ICB',
@@ -123,19 +157,13 @@ const closeSheet = async page => {
     shell.rootTransform === 'none' && shell.appTransform === 'none',
     `${shell.appTransform} / ${shell.rootTransform}`)
   check('The mobile app box reaches the bottom of the window',
-    Math.abs(shell.appBottom - shell.viewportH) < 1,
-    `${shell.appBottom} vs ${shell.viewportH}`)
-  check('The tab bar sits flush on the bottom edge',
-    Math.abs(shell.tabbarBottom - shell.viewportH) < 1,
-    `${shell.tabbarBottom} vs ${shell.viewportH}`)
+    Math.abs(shell.appBottom - shell.viewportH) < 1, `${shell.appBottom} vs ${shell.viewportH}`)
+  check('The capture bar sits flush on the bottom edge',
+    Math.abs(shell.captureBottom - shell.viewportH) < 1, `${shell.captureBottom} vs ${shell.viewportH}`)
 
   // src/iosViewport.ts MEASURES the installed-on-iOS shortfall; it must never
-  // correct for it. Rounds one to five all tried to reclaim that strip, and the
-  // last one "worked" only in the DOM: it reported a tab bar at 759 -> 852 while
-  // the device painted nothing past 793, because a black-translucent standalone
-  // web view is smaller than the screen and no CSS can paint outside it. The
-  // real fix is the status-bar-style meta. So: the class may land, and landing
-  // must change no geometry at all.
+  // correct for it — no CSS can paint outside a web view smaller than the
+  // screen. So the marker class may land, and landing must move nothing.
   const marker = await page.evaluate(() => {
     const before = {
       cls: document.documentElement.classList.contains('ios-short-viewport'),
@@ -144,7 +172,7 @@ const closeSheet = async page => {
     const r = sel => document.querySelector(sel).getBoundingClientRect().bottom
     const snap = () => ({
       app: r('.mobile-app'),
-      tabbar: r('.mobile-tabbar'),
+      bar: r('.mobile-capture'),
       transform: getComputedStyle(document.querySelector('.mobile-root')).transform,
     })
     const off = snap()
@@ -157,168 +185,127 @@ const closeSheet = async page => {
     marker.before.cls === false && marker.before.px === '0px',
     `class=${marker.before.cls} var=${marker.before.px}`)
   check('.ios-short-viewport is a diagnostic marker and moves nothing',
-    marker.off.app === marker.on.app
-    && marker.off.tabbar === marker.on.tabbar
-    && marker.on.transform === 'none',
-    `app ${marker.off.app}->${marker.on.app}, tabbar ${marker.off.tabbar}->${marker.on.tabbar}, transform ${marker.on.transform}`)
-  check('...and the app box and tab bar stay flush with the window bottom',
-    Math.abs(marker.on.app - marker.viewportH) < 1 && Math.abs(marker.on.tabbar - marker.viewportH) < 1,
-    `app ${marker.on.app}, tabbar ${marker.on.tabbar}, window ${marker.viewportH}`)
+    marker.off.app === marker.on.app && marker.off.bar === marker.on.bar && marker.on.transform === 'none',
+    `app ${marker.off.app}->${marker.on.app}, bar ${marker.off.bar}->${marker.on.bar}`)
 
-  // Round four: the correction placed the tab bar correctly and then `overflow:
-  // hidden` on the shell CLIPPED it — `overflow` on the root element propagates
-  // to the viewport, whose clip rect is the short initial containing block, so
-  // the labels and the bar's own background stopped 59px above the screen edge.
-  // Position was right, paint was cut. Nothing in the shell chain may clip.
+  // Round four of the iOS bug: `overflow: hidden` on the shell propagated to the
+  // viewport and CLIPPED the bottom chrome. Nothing in the shell chain may clip.
   const clip = await page.evaluate(() => {
     const ov = el => getComputedStyle(el).overflow
-    const labels = [...document.querySelectorAll('.mobile-tab-label')]
+    const labels = [...document.querySelectorAll('.mobile-nav-label')]
     return {
       html: ov(document.documentElement),
       body: ov(document.body),
       root: ov(document.getElementById('root')),
-      count: labels.length,
-      texts: labels.map(l => l.textContent),
-      lowest: Math.max(...labels.map(l => l.getBoundingClientRect().bottom)),
-      viewportH: window.innerHeight,
+      labels: labels.map(l => l.textContent),
     }
   })
   check('Nothing in the shell chain clips (html / body / #root)',
     ![clip.html, clip.body, clip.root].some(v => v.includes('hidden')),
     `html:${clip.html} body:${clip.body} #root:${clip.root}`)
-  check('All four tab labels are present and inside the window',
-    clip.count === 4 && clip.lowest <= clip.viewportH + 0.5,
-    `${clip.count} labels (${clip.texts.join('/')}), lowest ${clip.lowest} vs ${clip.viewportH}`)
+  check('Three pages: Thoughts · Clusters · Search',
+    clip.labels.join('|') === 'Thoughts|Clusters|Search', clip.labels.join('|'))
+  check('The Todoist chrome is gone (no tab bar, no + button, no quick-add sheet)',
+    (await page.locator('.mobile-tabbar, .mobile-fab, .mobile-qa-input').count()) === 0)
 
-  // 1. Today tab: overdue + today sections from due dates.
-  check('Today shows the overdue task',
-    await page.locator('.mobile-group-head.is-overdue').isVisible()
-    && await page.locator('.mobile-task-text', { hasText: 'renew the trailer tabs' }).isVisible())
-  check('Today shows tasks due today',
-    await page.locator('.mobile-task-text', { hasText: 'water the ficus' }).isVisible()
-    && await page.locator('.mobile-task-text', { hasText: 'gutter guards' }).isVisible())
-  check('Today tab badge counts overdue + today',
-    (await page.locator('.mobile-tab-badge').innerText()) === '3')
-  check('Priority colors the checkbox', await page.locator('.mobile-check.p1').isVisible())
-  check('Overdue row wears an overdue due-chip',
-    await page.locator('.due-chip.overdue', { hasText: 'Yesterday' }).isVisible())
-  check('Rows outside a project view show their project',
-    await page.locator('.mobile-task-proj', { hasText: 'work stuff' }).isVisible())
+  // 1. The landing page is never empty just because nothing is due.
+  check('Lands on Thoughts', await page.locator('.mobile-nav-btn.on', { hasText: 'Thoughts' }).isVisible())
+  check('Due today + overdue are pinned at the top',
+    await page.locator('.mobile-group-head.is-due').isVisible()
+    && await row('renew the trailer tabs').first().isVisible()
+    && await row('water the ficus').first().isVisible())
+  check('...and a pinned thought is not listed twice',
+    (await row('water the ficus').count()) === 1, `${await row('water the ficus').count()} rows`)
+  check('Undated thoughts fill the stream under a day header',
+    await page.locator('.mobile-day-head', { hasText: 'Today' }).isVisible()
+    && await row('pressure-wash pricing tiers').isVisible())
+  check('State repair: the orphaned glob is rendered, not lost',
+    await row('ORPHANED THOUGHT').isVisible())
 
-  // 2. Checkbox completes a task (it leaves the Today list).
-  await page.locator('.mobile-task', { hasText: 'water the ficus' }).locator('.mobile-check').click()
-  await page.waitForTimeout(400)
+  // 2. The capture bar: the whole point of the phone.
+  check('The capture bar is on screen, with the mic', await capture.isVisible()
+    && await page.locator('.mobile-capture .capture-mic').isVisible())
+  await catchIt('brand new thought from the pass')
+  // Checked before the state read below: the flash is meant to be brief.
+  check('...and says it was caught', await page.locator('.mobile-capture-flash', { hasText: 'caught' }).isVisible())
   let s = await readState(page)
-  check('Tapping the circle completes the task',
-    s.globs.find(g => g.id === 'g5')?.done === true
-    && !(await page.locator('.mobile-task-text', { hasText: 'water the ficus' }).isVisible()))
+  const fresh = s.globs.find(g => g.text === 'brand new thought from the pass')
+  check('Enter catches a plain thought into Unsorted',
+    !!fresh && fresh.clusterId === null && fresh.isTodo === false && fresh.dueDate == null)
+  check('...clears the bar and keeps focus for the next one',
+    (await capture.inputValue()) === ''
+    && await page.evaluate(() => document.activeElement?.classList.contains('mobile-capture-input')))
+  check('The new thought lands at the top of today',
+    (await page.locator('.mobile-day-head', { hasText: 'Today' }).locator('xpath=..').locator('.mobile-task-text').first().innerText())
+      .includes('brand new thought'))
 
-  // 3. Quick add FAB with natural-language date + priority.
-  check('Mic rides in the FAB stack', await page.locator('.mobile-fab-stack .capture-mic').isVisible())
-  await page.locator('.mobile-fab').click()
+  // 3. Dates in plain words, visible before you send, and refusable.
+  const barTop = (await capture.boundingBox()).y
+  await capture.fill('call mum tomorrow')
+  await page.waitForTimeout(150)
+  check('"tomorrow" shows as a date chip while typing',
+    await page.locator('.mobile-capture-date', { hasText: 'Tomorrow' }).isVisible())
+  check('...and the input does not jump when the chip appears',
+    Math.abs((await capture.boundingBox()).y - barTop) < 1, `${barTop} -> ${(await capture.boundingBox()).y}`)
+  await capture.press('Enter')
+  await page.waitForTimeout(200)
+  await capture.fill('tomorrow is jojo day')
+  await page.waitForTimeout(150)
+  await page.locator('.mobile-capture-date').click()
+  check('Tapping the chip away drops the date', (await page.locator('.mobile-capture-date').count()) === 0)
+  await capture.press('Enter')
+  await page.waitForTimeout(200)
+  await catchIt('fix the gate p2')
+  s = await readState(page)
+  const mum = s.globs.find(g => g.text === 'call mum')
+  check('A date word becomes a due date, lifted out of the text',
+    mum?.dueDate === TOMORROW && mum?.isTodo === true, JSON.stringify(mum && { t: mum.text, d: mum.dueDate }))
+  const jojo = s.globs.find(g => g.text.startsWith('tomorrow is jojo'))
+  check('...unless refused: then the words stay and no date is set',
+    jojo?.text === 'tomorrow is jojo day' && jojo?.dueDate == null)
+  const gate = s.globs.find(g => g.text.startsWith('fix the gate'))
+  check('Priority tokens are left alone on the phone',
+    gate?.text === 'fix the gate p2' && (gate?.priority ?? 4) === 4)
+
+  // 4. The nudge: sort a few, one at a time.
+  const nudge = page.locator('.mobile-nudge')
+  check('The "sort a few?" nudge shows when the pile is big enough', await nudge.isVisible())
+  await nudge.click()
   await page.waitForTimeout(350)
-  await page.locator('.mobile-qa-input').fill('brand new thought from the pass tomorrow p1')
-  check('Quick add parses "tomorrow" into the date chip live',
-    await page.locator('.mobile-qa-chip', { hasText: 'Tomorrow' }).isVisible())
-  await page.locator('.mobile-qa-input').press('Enter')
-  await page.waitForTimeout(300)
-  check('Quick add stays open for rapid fire',
-    await page.locator('.mobile-qa-input').isVisible()
-    && (await page.locator('.mobile-qa-input').inputValue()) === '')
-  await closeSheet(page)
-  s = await readState(page)
-  const added = s.globs.find(g => g.text === 'brand new thought from the pass')
-  check('NL tokens lift out: due tomorrow, P1, a to-do',
-    added?.dueDate === TOMORROW && added?.priority === 1 && added?.isTodo === true,
-    JSON.stringify({ due: added?.dueDate, prio: added?.priority }))
-
-  // 4. Upcoming groups by date.
-  await page.locator('.mobile-tab', { hasText: 'Upcoming' }).click()
-  await page.waitForTimeout(300)
-  check('Upcoming shows the tomorrow group',
-    await page.locator('.mobile-group-head', { hasText: 'Tomorrow' }).isVisible()
-    && await page.locator('.mobile-task-text', { hasText: 'brand new thought' }).isVisible())
-
-  // 5. Search reaches everything — including the repaired orphan.
-  await page.locator('.mobile-tab', { hasText: 'Search' }).click()
-  await page.waitForTimeout(300)
-  check('State repair: orphaned glob is rendered, not lost',
-    await page.locator('.mobile-task-text', { hasText: 'ORPHANED THOUGHT' }).isVisible())
-  await page.locator('.mobile-search input').fill('degreaser')
-  await page.waitForTimeout(400)
-  check('Search narrows to matches', (await page.locator('.mobile-task').count()) === 1,
-    `${await page.locator('.mobile-task').count()} rows`)
-  await page.locator('.mobile-search input').fill('')
+  const first = await page.locator('.mobile-sort-text').innerText()
+  check('Sorting starts at the newest thought', first === 'fix the gate p2', first)
+  await page.locator('.mobile-sort-chip', { hasText: 'side projects' }).click()
   await page.waitForTimeout(200)
-  await page.locator('.mobile-chip', { hasText: 'Flagged' }).click()
-  await page.waitForTimeout(300)
-  check('Flagged filter works', (await page.locator('.mobile-task').count()) === 1)
-  await page.locator('.mobile-chip', { hasText: 'All' }).click()
-
-  // 6. Browse: inbox + projects with drill-in.
-  await page.locator('.mobile-tab', { hasText: 'Browse' }).click()
-  await page.waitForTimeout(300)
-  check('Browse lists Inbox and the projects',
-    await page.locator('.mobile-browse-row', { hasText: 'Inbox' }).isVisible()
-    && await page.locator('.mobile-browse-row', { hasText: 'work stuff' }).isVisible()
-    && await page.locator('.mobile-browse-row', { hasText: 'side projects' }).isVisible())
-
-  await page.locator('.mobile-browse-row', { hasText: 'work stuff' }).click()
-  await page.waitForTimeout(300)
-  check('Project view opens with its tasks',
-    await page.locator('.mobile-proj-title', { hasText: 'work stuff' }).isVisible()
-    && await page.locator('.mobile-task-text', { hasText: 'order degreaser' }).isVisible())
-
-  // 7. Task detail sheet: set priority.
-  await page.locator('.mobile-task', { hasText: 'order degreaser' }).click()
-  await page.waitForTimeout(350)
-  check('Tapping a row opens its detail sheet',
-    await page.locator('.mobile-detail-text').isVisible())
-  await page.locator('.mobile-prio-btn', { hasText: 'P2' }).click()
+  check('Filing it advances to the next one',
+    (await page.locator('.mobile-sort-progress').textContent()).startsWith('2 of'))
+  await page.locator('.mobile-sort-act', { hasText: 'Skip' }).click()
   await page.waitForTimeout(200)
-  await closeSheet(page)
+  check('Skip moves on without touching it',
+    (await page.locator('.mobile-sort-progress').textContent()).startsWith('3 of'))
+  await page.locator('.mobile-head-link', { hasText: 'Enough for now' }).click()
+  await page.waitForTimeout(250)
   s = await readState(page)
-  check('Detail sheet sets priority', s.globs.find(g => g.id === 'g7')?.priority === 2)
+  check('The sorted thought is in its cluster',
+    s.globs.find(g => g.text === 'fix the gate p2')?.clusterId === 'c2'
+    && s.clusters.find(c => c.id === 'c2').globIds.includes(s.globs.find(g => g.text === 'fix the gate p2').id))
 
-  // 8. Swipe left → schedule sheet; pick tomorrow.
-  const gutter = page.locator('.mobile-task', { hasText: 'gutter guards' })
-  let box = await gutter.boundingBox()
-  await page.mouse.move(box.x + box.width - 60, box.y + box.height / 2)
-  await page.mouse.down()
-  for (let i = 1; i <= 10; i++) {
-    await page.mouse.move(box.x + box.width - 60 - i * 14, box.y + box.height / 2)
-  }
-  await page.mouse.up()
-  await page.waitForTimeout(400)
-  check('Swipe left opens the schedule sheet',
-    await page.locator('.mobile-sheet-row', { hasText: 'Tomorrow' }).isVisible())
-  await page.locator('.mobile-sheet-row', { hasText: 'Tomorrow' }).click()
-  await page.waitForTimeout(300)
+  // 5. Row gestures: right = done, left = file.
+  await swipe(row('pressure-wash pricing tiers'), 150)
   s = await readState(page)
-  check('Schedule sheet sets the due date', s.globs.find(g => g.id === 'g6')?.dueDate === TOMORROW)
+  check('Swipe right marks it done', s.globs.find(g => g.id === 'g2')?.done === true)
+  check('...and it stays in the stream, struck through',
+    ((await row('pressure-wash pricing tiers').getAttribute('class')) ?? '').includes('done'))
 
-  // 9. Swipe right → complete; lands under the Completed toggle.
-  box = await gutter.boundingBox()
-  await page.mouse.move(box.x + 40, box.y + box.height / 2)
-  await page.mouse.down()
-  for (let i = 1; i <= 10; i++) {
-    await page.mouse.move(box.x + 40 + i * 14, box.y + box.height / 2)
-  }
-  await page.mouse.up()
-  await page.waitForTimeout(500)
+  await swipe(row('jojo dinosaur birthday'), -150)
+  check('Swipe left opens "file into"',
+    await page.locator('.mobile-sheet-title', { hasText: 'into' }).isVisible())
+  await page.locator('.mobile-sheet-row', { hasText: 'side projects' }).click()
+  await page.waitForTimeout(250)
   s = await readState(page)
-  check('Swipe right completes the task', s.globs.find(g => g.id === 'g6')?.done === true)
-  check('Completed tasks fold away in the project view',
-    await page.locator('.mobile-completed-toggle', { hasText: 'Completed' }).isVisible()
-    && !(await page.locator('.mobile-task-text', { hasText: 'gutter guards' }).isVisible()))
-  await page.locator('.mobile-completed-toggle').click()
-  await page.waitForTimeout(200)
-  check('Completed toggle reveals them',
-    await page.locator('.mobile-task-text', { hasText: 'gutter guards' }).isVisible())
+  check('...and filing puts it in the cluster', s.globs.find(g => g.id === 'g3')?.clusterId === 'c2')
 
-  // 10. A vertical scroll must not swipe anything.
-  const beforeScroll = (await readState(page)).globs
-  const t2 = await page.locator('.mobile-task').first().boundingBox()
+  const beforeScroll = (await readState(page)).globs.map(g => [g.id, g.done, g.clusterId])
+  const t2 = await centre(row('call the arborist'))
   await page.mouse.move(t2.x + t2.width / 2, t2.y + t2.height / 2)
   await page.mouse.down()
   for (let i = 1; i <= 8; i++) {
@@ -326,82 +313,127 @@ const closeSheet = async page => {
     await page.mouse.move(t2.x + t2.width / 2 - i * 4, t2.y + t2.height / 2 + i * 18)
   }
   await page.mouse.up()
-  await page.waitForTimeout(400)
-  const afterScroll = (await readState(page)).globs
+  await page.waitForTimeout(300)
   check('A drifting vertical scroll changes nothing',
-    JSON.stringify(afterScroll.map(g => [g.id, g.done, g.dueDate]))
-    === JSON.stringify(beforeScroll.map(g => [g.id, g.done, g.dueDate])))
+    JSON.stringify((await readState(page)).globs.map(g => [g.id, g.done, g.clusterId])) === JSON.stringify(beforeScroll))
 
-  // 11. Long-press → select mode → bulk move → single undo.
-  const row = page.locator('.mobile-task', { hasText: 'order degreaser' })
-  box = await row.boundingBox()
-  await page.mouse.move(box.x + 140, box.y + box.height / 2)
-  await page.mouse.down()
-  await page.waitForTimeout(700)
-  await page.mouse.up()
+  // 6. The detail sheet: dates yes, priorities no.
+  await row('call the arborist').click()
+  await page.waitForTimeout(350)
+  check('Tapping a row opens its details, with when it was caught',
+    await page.locator('.mobile-detail-when', { hasText: 'caught today at' }).isVisible())
+  check('...and no priority picker', (await page.locator('.mobile-detail-row', { hasText: 'Priority' }).count()) === 0)
+  await page.locator('.mobile-detail-row', { hasText: 'Due date' }).click()
   await page.waitForTimeout(250)
-  check('Long-press enters select mode', await page.locator('.bulk-bar').isVisible())
-  await page.locator('.mobile-task', { hasText: 'gutter guards' }).click()
-  await page.waitForTimeout(200)
-  check('Tapping adds to the selection',
-    (await page.locator('.mobile-select-count').innerText()).startsWith('2'))
-  await page.locator('.bulk-btn', { hasText: 'Move…' }).click()
-  await page.waitForTimeout(300)
-  await page.locator('.mobile-sheet-row', { hasText: 'side projects' }).click()
-  await page.waitForTimeout(500)
+  await page.locator('.mobile-sheet-row', { hasText: 'Tomorrow' }).click()
+  await page.waitForTimeout(250)
+  check('Picking a date returns to the details, showing it',
+    await page.locator('.mobile-detail-row', { hasText: 'Due date' }).locator('.mobile-detail-value', { hasText: 'Tomorrow' }).isVisible())
+  await closeSheet(page)
   s = await readState(page)
-  check('Bulk move filed both into the target project',
-    s.clusters.find(c => c.id === 'c2')?.globIds.length === 2)
-  check('Select mode exits after the batch', !(await page.locator('.bulk-bar').isVisible()))
-  await page.locator('.undo-redo-btn').first().click()
-  await page.waitForTimeout(600)
-  s = await readState(page)
-  check('A single undo reverses the whole batch',
-    s.clusters.find(c => c.id === 'c2')?.globIds.length === 0)
+  check('...and saves it', s.globs.find(g => g.id === 'g1')?.dueDate === TOMORROW)
 
-  // 12. New project from Browse.
-  await page.locator('.mobile-tab', { hasText: 'Browse' }).click()
-  await page.waitForTimeout(300)
-  await page.locator('.mobile-browse-row.is-add').click()
-  await page.waitForTimeout(300)
-  await page.locator('.mobile-sheet .mobile-qa-input').fill('reading list')
-  await page.locator('.mobile-prompt-btn', { hasText: 'Create' }).click()
-  await page.waitForTimeout(400)
-  s = await readState(page)
-  check('Add project creates an empty cluster',
-    s.clusters.some(c => c.name === 'reading list')
-    && await page.locator('.mobile-browse-row', { hasText: 'reading list' }).isVisible())
-
-  // 13. Making an Inbox thought a to-do keeps it in the Inbox. Desktop wraps a
-  // free glob in a cluster (it has no checkbox out there); the phone must not,
-  // or every Inbox to-do would get filed into a project called "new cluster".
+  // Making an Unsorted thought a to-do keeps it Unsorted. Desktop wraps a free
+  // glob in a cluster (it has no checkbox out there); the phone must not.
   const clustersBeforeTodo = s.clusters.length
-  await page.locator('.mobile-browse-row', { hasText: 'Inbox' }).click()
-  await page.waitForTimeout(300)
-  await page.locator('.mobile-task', { hasText: 'call the arborist' }).click()
+  await row('ORPHANED THOUGHT').click()
   await page.waitForTimeout(350)
   await page.locator('.mobile-detail-row', { hasText: 'Make a to-do' }).click()
   await page.waitForTimeout(200)
   await closeSheet(page)
   s = await readState(page)
-  const arborist = s.globs.find(g => g.id === 'g1')
-  check('Making an Inbox thought a to-do keeps it in the Inbox',
-    arborist?.isTodo === true && arborist?.clusterId === null
+  check('Making an Unsorted thought a to-do keeps it Unsorted',
+    s.globs.find(g => g.id === 'g8')?.isTodo === true && s.globs.find(g => g.id === 'g8')?.clusterId === null
     && s.clusters.length === clustersBeforeTodo)
 
-  // Backups reachable from the phone — the point of putting the panel in
-  // shared chrome is that the device to hand is the one that has it.
-  await page.locator('.mobile-tab', { hasText: 'Browse' }).click()
+  // 7. Select mode → a brand-new cluster → one undo.
+  await longPress(row('brand new thought from the pass'))
+  check('Long-press enters select mode', await page.locator('.bulk-bar').isVisible())
+  check('...which takes the capture bar\'s place', (await page.locator('.mobile-capture').count()) === 0)
+  await row('tomorrow is jojo day').click()
+  await page.waitForTimeout(200)
+  check('Tapping adds to the selection', (await page.locator('.mobile-select-count').innerText()).startsWith('2'))
+  await page.locator('.bulk-btn', { hasText: 'File' }).click()
+  await page.waitForTimeout(250)
+  await page.locator('.mobile-sheet-row', { hasText: 'New cluster' }).click()
+  await page.waitForTimeout(250)
+  await page.locator('.mobile-prompt-input').fill('errands')
+  await page.locator('.mobile-prompt-btn', { hasText: 'Create' }).click()
   await page.waitForTimeout(300)
-  await page.locator('.mobile-browse-row', { hasText: 'Backups' }).click()
+  s = await readState(page)
+  const errands = s.clusters.find(c => c.name === 'errands')
+  check('File → New cluster makes one holding both', errands?.globIds.length === 2)
+  check('Select mode exits after the batch', !(await page.locator('.bulk-bar').isVisible()))
+  await page.locator('.undo-redo-btn').first().click()
+  s = await readState(page)
+  check('Undo lives in the capture bar and reverses the batch in one tap',
+    !s.clusters.some(c => c.name === 'errands'))
+
+  // 8. Clusters: its own page, and capture follows you into a cluster.
+  await page.locator('.mobile-nav-btn', { hasText: 'Clusters' }).click()
   await page.waitForTimeout(300)
-  check('Browse opens the backups panel on mobile',
-    await page.locator('.backups-panel').isVisible())
+  check('Clusters page shows Unsorted and every cluster as a card',
+    await page.locator('.mobile-cluster-card.is-unsorted').isVisible()
+    && await page.locator('.mobile-cluster-card', { hasText: 'work stuff' }).isVisible()
+    && await page.locator('.mobile-cluster-card', { hasText: 'side projects' }).isVisible())
+  await page.locator('.mobile-cluster-card', { hasText: 'work stuff' }).click()
+  await page.waitForTimeout(300)
+  check('A cluster opens with its thoughts',
+    await page.locator('.mobile-view-title', { hasText: 'work stuff' }).isVisible()
+    && await row('order degreaser').isVisible())
+  check('...and the capture bar now adds to it',
+    await page.locator('.mobile-capture-target', { hasText: 'work stuff' }).isVisible()
+    && (await capture.getAttribute('placeholder')).includes('work stuff'))
+  await catchIt('buy a ladder')
+  check('...and says where it went', await page.locator('.mobile-capture-flash', { hasText: 'work stuff' }).isVisible())
+  s = await readState(page)
+  check('A thought caught inside a cluster lands in it',
+    s.globs.find(g => g.text === 'buy a ladder')?.clusterId === 'c1')
+  await row('order degreaser').locator('.mobile-check').click()
+  await page.waitForTimeout(300)
+  check('Done thoughts fold away under Done',
+    await page.locator('.mobile-completed-toggle', { hasText: 'Done' }).isVisible()
+    && !(await row('order degreaser').isVisible()))
+  await page.locator('.mobile-back-btn').click()
+  await page.waitForTimeout(250)
+  await page.locator('.mobile-cluster-card.is-add').click()
+  await page.waitForTimeout(250)
+  await page.locator('.mobile-prompt-input').fill('reading list')
+  await page.locator('.mobile-prompt-btn', { hasText: 'Create' }).click()
+  await page.waitForTimeout(300)
+  s = await readState(page)
+  check('New cluster from the Clusters page creates an empty one',
+    s.clusters.some(c => c.name === 'reading list' && c.globIds.length === 0)
+    && await page.locator('.mobile-cluster-card', { hasText: 'reading list' }).isVisible())
+
+  // 9. Search: its own page.
+  await page.locator('.mobile-nav-btn', { hasText: 'Search' }).click()
+  await page.waitForTimeout(300)
+  check('Search focuses its own box',
+    await page.evaluate(() => document.activeElement?.getAttribute('type') === 'search'))
+  await page.locator('.mobile-search input').fill('degreaser')
+  await page.waitForTimeout(250)
+  check('Search narrows to matches, done ones included', (await page.locator('.mobile-task').count()) === 1)
+  await page.locator('.mobile-search input').fill('')
+  await page.locator('.mobile-chip', { hasText: 'Dated' }).click()
+  await page.waitForTimeout(250)
+  check('"Dated" lists what\'s scheduled, soonest first',
+    (await page.locator('.mobile-task-text').first().innerText()) === 'renew the trailer tabs')
+  await page.locator('.mobile-chip', { hasText: 'Flagged' }).click()
+  await page.waitForTimeout(250)
+  check('Flagged filter works', (await page.locator('.mobile-task').count()) === 1)
+  await page.locator('.mobile-chip', { hasText: 'All' }).click()
+
+  // 10. Backups + diagnostics, tucked at the bottom of Clusters.
+  await page.locator('.mobile-nav-btn', { hasText: 'Clusters' }).click()
+  await page.waitForTimeout(300)
+  await page.locator('.mobile-quiet-row', { hasText: 'Backups' }).click()
+  await page.waitForTimeout(300)
+  check('Clusters opens the backups panel on mobile', await page.locator('.backups-panel').isVisible())
   check('...which offers the export file when signed out',
     await page.locator('.backups-btn', { hasText: 'export' }).isVisible())
   check('...and says version history needs a sign-in',
-    (await page.locator('.backups-note').first().textContent() ?? '').length > 0
-    && await page.locator('.backups-note', { hasText: 'Sign in' }).isVisible())
+    await page.locator('.backups-note', { hasText: 'Sign in' }).isVisible())
 
   // Import merges: seed a file holding one thought this galaxy has never seen.
   const importPath = `${os.tmpdir()}/adhdo-import-test.json`
@@ -419,34 +451,30 @@ const closeSheet = async page => {
     `globs ${afterImport.globs.length}, imp1 ${afterImport.globs.some(g => g.id === 'imp1')}`)
   fs.rmSync(importPath, { force: true })
 
-  // Diagnostics: the panel that tells a stale bundle from a failed fix. Its
-  // build line is the whole point — four rounds of the iOS viewport bug could
-  // not answer "is the phone even running this?" from a screenshot.
+  // Diagnostics: the panel that tells a stale bundle from a failed fix.
   await page.keyboard.press('Escape')   // the backups panel is still open
   await page.waitForTimeout(250)
-  await page.locator('.mobile-browse-row', { hasText: 'Diagnostics' }).click()
+  await page.locator('.mobile-quiet-row', { hasText: 'Diagnostics' }).click()
   await page.waitForTimeout(300)
-  check('Browse opens the diagnostics panel on mobile',
-    await page.locator('.diag-panel').isVisible())
+  check('Clusters opens the diagnostics panel on mobile', await page.locator('.diag-panel').isVisible())
   const diag = await page.evaluate(() => Object.fromEntries(
     [...document.querySelectorAll('.diag-row')].map(r => [
       r.querySelector('.diag-key').textContent,
       r.querySelector('.diag-val').textContent,
     ])))
   check('...and names the build it is running',
-    /\S+ \u00b7 \d{4}-\d{2}-\d{2}T/.test(diag.build ?? ''), diag.build)
+    /\S+ · \d{4}-\d{2}-\d{2}T/.test(diag.build ?? ''), diag.build)
   check('...and reports the readings the fix turns on',
     diag.standalone === 'false'
     && diag['measured shortfall'] === '0px'
     && diag['correction applied'] === 'false'
     && (diag['overflow html / body / #root'] ?? '').split('/').every(v => !v.includes('hidden')),
-    JSON.stringify({ standalone: diag.standalone, shortfall: diag['measured shortfall'], overflow: diag['overflow html / body / #root'] }))
-  check('...and all four tab labels are accounted for',
-    !(diag['lowest tab label'] ?? '').includes('none'), diag['lowest tab label'])
+    JSON.stringify({ standalone: diag.standalone, shortfall: diag['measured shortfall'] }))
+  check('...and measures the capture bar as the bottom-edge canary',
+    /^\d+ of \d+$/.test(diag['capture bar bottom'] ?? ''), diag['capture bar bottom'])
   await page.keyboard.press('Escape')
   await page.waitForTimeout(250)
-  check('Esc closes the diagnostics panel',
-    !(await page.locator('.diag-panel').isVisible()))
+  check('Esc closes the diagnostics panel', !(await page.locator('.diag-panel').isVisible()))
 
   check('No console errors (mobile)', errors.length === 0, errors.slice(0, 3).join(' | '))
   await ctx.close()

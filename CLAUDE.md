@@ -4,7 +4,7 @@
 
 ## What this is
 
-A personal todo/brain-dump app for Nic (who has ADHD). Floating blobby "globs" drift in a galaxy-themed space. Zero-friction capture, optional organization, everything malleable. The anti-Notion. (Formerly also "the anti-Todoist" — since 2026-09-16 the **mobile** layout is deliberately a Todoist clone, because on a phone that shape actually works; the desktop galaxy remains defiantly itself.)
+A personal todo/brain-dump app for Nic (who has ADHD). Floating blobby "globs" drift in a galaxy-themed space. Zero-friction capture, optional organization, everything malleable. The anti-Notion, and the anti-Todoist. On the phone it is a capture pocket (catch a thought in five seconds); on the desktop, the galaxy where those thoughts live and slowly get organised.
 
 ## Stack
 
@@ -16,10 +16,10 @@ A personal todo/brain-dump app for Nic (who has ADHD). Floating blobby "globs" d
 
 - **App.tsx**: all state + CRUD operations (addGlob, addTask, deleteGlob, createCluster, mergeClusters, connectClusters, setGlobDueDate, setGlobPriority, etc), plus all cloud sync. Passes callbacks to Galaxy / MobileApp. **deleteGlob keeps emptied clusters** (since 2026-09-16): on mobile a cluster is a first-class project and must survive its last task; desktop still has explicit delete/dissolve paths.
 - **Galaxy.tsx**: desktop rendering + physics loop (rAF) + all interaction handlers (drag, drop, connect, shake detect, context menus). Uses `handleDropRef` pattern to avoid stale closures in pointer events.
-- **MobileApp.tsx**: the phone UI — a Todoist-shaped task app, not the galaxy. Same state, same App callbacks. Mounted instead of Galaxy when `useIsMobile()`. See "Mobile" below.
+- **MobileApp.tsx**: the phone UI — a capture pocket (persistent capture bar, journal stream, Clusters + Search pages), not the galaxy. Same state, same App callbacks. Mounted instead of Galaxy when `useIsMobile()`. See "Mobile" below.
 - **AppChrome.tsx**: shared chrome used by both layouts (HomeButton, AuthButton, UndoRedoBar, CaptureBar, MicButton, VoiceOverlay, indicators).
 - **useVoiceCapture.ts**: hands-free dictation session. Owned by App.tsx (not the capture bars) so the two layouts can never open two mic sessions.
-- **agenda.ts**: `buildAgenda(globs)` — the one definition of overdue / today / upcoming, called by BOTH the phone's Today+Upcoming tabs and the desktop agenda dock. Deliberately outside either layout: the moment each computed its own buckets they'd drift, and a task that shows on the phone but not the laptop is worse than no panel at all. Only open, dated to-dos land on an agenda.
+- **agenda.ts**: `buildAgenda(globs)` — the one definition of overdue / today / upcoming, called by BOTH the phone's pinned Due section and the desktop agenda dock. Deliberately outside either layout: the moment each computed its own buckets they'd drift, and a task that shows on the phone but not the laptop is worse than no panel at all. Only open, dated to-dos land on an agenda.
 - **dates.ts**: local-calendar due-date arithmetic (`'YYYY-MM-DD'` strings, never UTC Dates), `formatDue` (label + tone for the shared due-chip), and `parseQuickAdd` (the "call mum tomorrow p2" natural-language lift-out). Shared by MobileApp and GalaxyChrome so both layouts speak identical dates.
 - **iosViewport.ts**: measures, on the device, how far the layout viewport falls short of the real screen in an installed iOS web app, and publishes it as `--ios-shortfall` / `.ios-short-viewport`. Called once from main.tsx, never from a React effect — see the window-listener note below. Inert everywhere the bug is absent.
 - **store.ts**: factory functions (makeGlob, makeCluster, makeConnection), localStorage load/save, cloud save/load + merge + repair, color palette.
@@ -32,7 +32,7 @@ Both live in one stylesheet, so a bare galaxy class like `.cluster` (which is
 `position: absolute` + `transform: translate(-50%,-50%)` + `min-width: 200px`) will hit
 any mobile element that reuses the name. This shipped broken once: the mobile cluster
 header used `className="mobile-section-head cluster"` and got yanked out of flow.
-**Mobile modifiers are prefixed `is-`** (`.mobile-browse-row.is-add`, `.mobile-group-head.is-overdue`).
+**Mobile modifiers are prefixed `is-`** (`.mobile-cluster-card.is-add`, `.mobile-group-head.is-due`).
 Keep it that way, and never give a mobile element a bare galaxy class name. The one
 deliberately shared class is `.due-chip` — defined once in the shared section, worn by
 galaxy rows, free globs, and mobile task rows alike.
@@ -70,38 +70,86 @@ galaxy rows, free globs, and mobile task rows alike.
 - **Cluster context menu → "🧹 Clear completed (n)"** deletes the ticked-off to-dos in that cluster in one undo step. Disabled at `n === 0`, and `clearCompletedInCluster` returns `prev` untouched in that case so an empty sweep pushes no undo snapshot.
 - Context menus + recolor popover clamp to viewport so they never clip off-screen.
 - Todo mode with checkboxes, done state (line-through)
-- **Due dates + priorities (2026-09-16, the Todoist import).** `glob.dueDate` (`'YYYY-MM-DD'` local, null = undated) and `glob.priority` (1–4, Todoist semantics: 1 red / 2 orange / 3 blue / 4 none; absent on old records = 4). Scheduling or prioritizing something makes it a to-do (`isTodo` set alongside); clearing the date doesn't unset to-do. **Making a free glob a to-do on desktop wraps it in a one-member cluster** (`toggleTodoOnCanvas`, one undo step) — a free glob has no checkbox, so the to-do would otherwise be invisible. Mobile deliberately gets plain `toggleTodo`: there an unclustered glob *is* the Inbox and already shows a checkbox, so wrapping would pull it out of Inbox. Desktop surface: glob context menu → "📅 Due date…" (SchedulePopover: Today/Tomorrow/Weekend/Next week/date input/clear) and "⚑ Priority…" (PriorityPopover); cluster rows + free globs wear a `.due-chip` (tone-colored by `formatDue`: overdue red, today green, tomorrow orange, this-week violet); `.todo-check.p1/.p2/.p3` tints the checkbox. Priority hues are design knobs (`--p1/--p2/--p3` in index.css). ⚠️ These fields are in `stateSignature` — drop them there and scheduling stops persisting.
-- **Agenda dock (2026-09-17)** — desktop's answer to the phone's Today tab, and the last piece of the mobile/desktop symmetry. Calendar button in the tool column (badged with overdue+today, the same number the phone puts on its tab) opens a right-docked panel: overdue / today / one section per upcoming day, off `buildAgenda`. Rows carry the priority-tinted checkbox (tick to complete in place), the flag, and the cluster they live in; clicking one calls `jumpToGlob` — expand its cluster, centre it, pulse the glob — which is now **shared with Cmd+K search** (`useGalaxySearch` returns it) so "show me where this lives" means one thing.
+- **Due dates + priorities (2026-09-16, the Todoist import).** `glob.dueDate` (`'YYYY-MM-DD'` local, null = undated) and `glob.priority` (1–4, Todoist semantics: 1 red / 2 orange / 3 blue / 4 none; absent on old records = 4). Scheduling or prioritizing something makes it a to-do (`isTodo` set alongside); clearing the date doesn't unset to-do. **Making a free glob a to-do on desktop wraps it in a one-member cluster** (`toggleTodoOnCanvas`, one undo step) — a free glob has no checkbox, so the to-do would otherwise be invisible. Mobile deliberately gets plain `toggleTodo`: there an unclustered glob *is* Unsorted and already shows a checkbox, so wrapping would pull it out of Unsorted. Desktop surface: glob context menu → "📅 Due date…" (SchedulePopover: Today/Tomorrow/Weekend/Next week/date input/clear) and "⚑ Priority…" (PriorityPopover); cluster rows + free globs wear a `.due-chip` (tone-colored by `formatDue`: overdue red, today green, tomorrow orange, this-week violet); `.todo-check.p1/.p2/.p3` tints the checkbox. Priority hues are design knobs (`--p1/--p2/--p3` in index.css). ⚠️ These fields are in `stateSignature` — drop them there and scheduling stops persisting.
+- **Agenda dock (2026-09-17)** — desktop's answer to the phone's Today tab, and the last piece of the mobile/desktop symmetry. Calendar button in the tool column (badged with overdue+today, the same count as the phone's pinned Due section) opens a right-docked panel: overdue / today / one section per upcoming day, off `buildAgenda`. Rows carry the priority-tinted checkbox (tick to complete in place), the flag, and the cluster they live in; clicking one calls `jumpToGlob` — expand its cluster, centre it, pulse the glob — which is now **shared with Cmd+K search** (`useGalaxySearch` returns it) so "show me where this lives" means one thing.
   - ⚠️ **It is a DOCK, not a menu.** It is absent from `closeMenus` on purpose — you tick things off while working the galaxy, so a stray background click must not dismiss it. Only its own ✕ or Esc (`closeTransientUi`) closes it. It also had to join `refocusInput`'s ignore list in App.tsx, or clicking a row yanks focus back to the capture bar.
   - ⚠️ **The panel stops at `bottom: 150px`, above the trash zone.** `isOverTrash()` computes its hit-box from `window.innerWidth/Height`, not from the DOM, so shifting the bin left to make room would move the picture and leave the hit-test behind. Ending the panel short is the honest fix.
   - Redundancy is suppressed per section: the today and per-day sections omit the due chip their own header already states; only overdue rows carry one.
 - Ctrl/Cmd+click shortcut: on a free glob → auto-clusters it + toggles todo; on a cluster item → toggles todo; on the cluster body (anywhere not an item) → toggles ALL items as todos (set-all semantics: if any item isn't a todo, all become todos; if all are todos, all flip back). Suppresses macOS native ctrl+click contextmenu so the shortcut wins.
 - localStorage persistence, 300ms debounced auto-save
 
-## Mobile: the Todoist-shaped app (rewritten 2026-09-16; PWA since 2026-08-22)
+## Mobile: the capture pocket (rewritten 2026-09-25; PWA since 2026-08-22)
 
-The old mobile view was the galaxy's data as a bare list — functional for capture,
-frustrating for everything else. It's now a deliberate Todoist clone in UI and UX,
-mapped 1:1 onto the shared state so desktop and phone are two windows on one galaxy:
+**The phone has one job: catch a thought within ~5 seconds, or it's gone** (Nic's words —
+see memory `project_adhdo_purpose`). Measure every phone feature against that.
 
-| Todoist concept | adhdo state |
-|---|---|
-| project | cluster (color dot = `cluster.color`) |
-| Inbox | unclustered globs |
-| task | glob (checkbox circle on every row; plain thoughts stay non-todo) |
-| due date / priority | `glob.dueDate` / `glob.priority` (see desktop reflection above) |
+History, so nobody repeats it: until 2026-09-16 the phone was the galaxy's data as a bare
+list (fine for capture, frustrating for the rest). It was then rebuilt as a faithful
+Todoist clone — Today/Upcoming/Search/Browse tabs, a + button with a quick-add sheet,
+P1–P4 priorities. That made the phone a *planner*: it opened on "what's due today", and a
+raw thought landed two taps deep in an Inbox. A week later Nic called it drift from
+adhdo's purpose, and on 2026-09-25 it became this. **Don't reintroduce a landing page
+that can be empty, or put capture behind a button.**
 
-- **Bottom tabs: Today / Upcoming / Search / Browse.** Today = overdue section + due-today (undone todos only), badge on the tab counts both. Upcoming groups by calendar day. Search = live filter + chips (All/To-do/Flagged/Done) across everything, including inside projects. Browse = Inbox row, Flagged row, My Projects list (+ Add project → empty cluster via `addCluster`; empty clusters now survive, see App.tsx note).
-- **Project drill-in** from Browse: active rows in `globIds` order, "＋ Add task" ghost row (quick add pre-targeted to the project), completed rows folded under a "Completed (n)" toggle, ⋯ menu (rename / color via PALETTE swatches / convert-all-todos / clear completed / delete-keep-thoughts / delete-with-thoughts).
-- **Quick-add FAB** (the heart of it): floating + opens a bottom sheet that stays open for rapid fire. `parseQuickAdd` lifts natural language out of the text **live** — "water the ficus tomorrow p2" fills the date and priority chips as you type (word-bounded tokens only: today/tonight/tomorrow/tmrw/next week/full weekday names/p1–p4 — short weekday forms are deliberately not parsed, "sat down" must never schedule anything). Chips override parsing; project chip defaults to the open project, else Inbox. Undated/unprioritized captures stay plain thoughts — the brain-dump soul survives the Todoist skin.
-- **Row gestures, Todoist grammar: swipe right = complete, swipe left = schedule** (opens the date sheet — deleting by flick is gone; delete lives in the detail sheet and select mode, which is the right friction for ADHD). Axis-locked exactly like before: a pointer is classified once as swipe or scroll, never both, with pointer capture, and a `consumed` ref + `onClickCapture` so a gesture can't also open the sheet.
-- **Tap a row → detail sheet**: multiline text edit (commits on blur), project / due date / priority (P1–P4 inline) / flag / todo-toggle / delete rows. Sheets pointing at records deleted underneath them (undo, sync) close via an effect — never render a ghost.
-- **Select mode**: long-press (450ms, cancelled by any real movement) → checkboxes + bulk bar (To-do / Flag / Move… / Delete). `moveGlobsToCluster` and `toggleFlagGlobs` in App.tsx exist so a batch is **one** undo step, not N.
-- **Voice capture** (`useVoiceCapture.ts`; mic mini-FAB above the + on mobile, capture-bar mic on desktop). Not a one-shot: it's a dictation *session* — `continuous` + auto-restart on `onend` (iOS ends a session after every pause), and each `isFinal` result is committed as its own glob immediately, so an interrupted session keeps everything said before it. Confirms with a WebAudio blip because the user is driving and not looking. Holds a Wake Lock while listening. Feature-detected; the button hides where there's no `SpeechRecognition`.
-- **Installable PWA.** `public/manifest.webmanifest` + `public/sw.js` (network-first for navigations so deploys land, cache-first for hashed `/assets/`, everything else straight to network — Supabase must never be cached). Registered in `main.tsx` **only under `import.meta.env.PROD`**; a worker in dev fights Vite HMR. Icons are generated by `node scripts/make-icons.mjs` — a dependency-free PNG encoder (zlib + hand-rolled CRC) that draws three globs and a tether. Edit the script, never the PNGs. **`scripts/how-to-make-iOS-icon.md` is the full guide** (swapping in custom art, the iOS art rules, and the two caches that hide a changed icon), and it covers the sibling repos too. ⚠️ `sw.js` serves `.png`/`.webmanifest` **cache-first**, so changing an icon without bumping `CACHE` (`adhdo-v1`) leaves every installed device on the old art forever. The `?capture=1` home-screen shortcut now opens the quick-add sheet.
+- **The capture bar is always on screen**, fixed to the bottom, under the thumb: mic ·
+  input · send. Enter sends and *keeps focus* (rapid fire); the send button
+  `preventDefault`s mousedown so tapping it doesn't drop the keyboard. On load the input
+  is focused (a no-op on iOS, which ignores unrequested focus; instant on Android).
+- **The status strip** above the input is always rendered at a fixed height — cluster
+  target chip, the "📅 Tomorrow ✕" date chip, the "✓ caught" flash (1.4s) — with
+  **undo docked at its right end**. Fixed height is deliberate: a chip appearing
+  mid-sentence must not shove the input up under the thumb (smoke asserts the input
+  doesn't move). The "caught" flash exists because from Search, or scrolled down, the new
+  thought isn't in view, and not knowing whether it saved is its own kind of lost. The
+  2s-later local "saved" toast is hidden on the phone (redundant, and it landed on the nav);
+  the cloud indicator drops below the header.
+- **Dates in plain words**: `parseQuickAdd(text, { priority: false })` — "call mum
+  tomorrow" shows the chip *while typing*; tap the chip to refuse it and the words stay
+  ("tomorrow is jojo's day" is a memory, not a deadline). Word-bounded tokens only
+  (today/tonight/tomorrow/tmrw/next week/full weekday names); short forms like "sat" are
+  never parsed. **Priority tokens are left in the text on the phone** — it never shows or
+  sets priority, and a word silently vanishing from what you typed is a small betrayal.
+  (Desktop still sets P1–P4; the phone shows the tint on the checkbox.)
+- **Three pages, a pill up top: Thoughts · Clusters · Search.** Home and account buttons
+  go icon-only on the phone to make room. Tapping the page you're on scrolls to top.
+- **Thoughts** (landing page) is a journal: every thought, newest first, grouped under
+  sticky day headers (`formatCaptureDay`: Today / Yesterday / weekday / date). Done ones
+  stay, struck through — it's a record of Nic, not a queue. Overdue + due-today are pinned
+  above in a **Due** section (off the shared `buildAgenda`), and a pinned thought is left
+  out of the stream while it's pinned (the same row twice read as a glitch). **Never empty
+  just because nothing is due.**
+- **The nudge — "🌀 N unsorted — sort a few?"** appears once ≥3 thoughts are unsorted
+  (`NUDGE_AT`; fewer would be nagging). It opens a one-at-a-time sort sheet: the thought
+  big, cluster chips to file it, "＋ new" to name a cluster inline, Delete / Done / Skip,
+  and "Enough for now". The queue is loose thoughts newest-first (freshest in your head)
+  **plus whatever the weekly sweep filed into `orphans`** — the sweep and the nudge work
+  together, so nothing escapes the pile by ageing out of it. The queue is snapshotted on
+  open, so filing one doesn't reshuffle the rest.
+- **Clusters** is a 2-column grid of glowing cards (name, open/done counts, a peek at the
+  newest open thought), with a full-width **Unsorted** card first and a dashed "＋ New
+  cluster". Open one: its open thoughts, done ones folded under "Done (n)", ⋯ menu
+  (rename / color / all to-dos / clear done / ungroup / delete). **Inside a cluster the
+  capture bar captures into it** (target chip + "add to …" placeholder + "caught → name").
+  Backups & Diagnostics sit quietly at the bottom of this page.
+- **Search** is its own page (box autofocuses): chips All / To-do / **Dated** / Flagged /
+  Done. "Dated" sorts soonest-first — it's what the Upcoming tab used to be.
+- **Row gestures: swipe right = done (toggle), swipe left = *file* it** (the move sheet:
+  Unsorted / clusters / ＋ New cluster…). Filing replaced Todoist's swipe-to-schedule
+  because filing is the thing the phone should nudge; scheduling lives in the detail
+  sheet. No flick-to-delete. Axis-locked: a pointer is classified once as swipe or scroll,
+  with pointer capture, and a `consumed` ref + `onClickCapture` so a gesture can't also
+  open the sheet.
+- **Tap a row → details**: multiline edit (commits on blur), "caught Tuesday at 3:42 pm",
+  cluster / due date / flag / to-do toggle / delete. No priority row. Sheets pointing at
+  records deleted underneath them (undo, sync) close via an effect — never a ghost.
+- **Select mode**: long-press (450ms) → checkboxes; the bulk bar (To-do / Flag / File… /
+  Delete) takes the capture bar's place. File… offers ＋ New cluster (→
+  `transferToNewCluster`). Each batch is **one** undo step.
+- **Voice capture** (`useVoiceCapture.ts`; the mic sits in the capture bar on both layouts; voice always lands in Unsorted). Not a one-shot: it's a dictation *session* — `continuous` + auto-restart on `onend` (iOS ends a session after every pause), and each `isFinal` result is committed as its own glob immediately, so an interrupted session keeps everything said before it. Confirms with a WebAudio blip because the user is driving and not looking. Holds a Wake Lock while listening. Feature-detected; the button hides where there's no `SpeechRecognition`.
+- **Installable PWA.** `public/manifest.webmanifest` + `public/sw.js` (network-first for navigations so deploys land, cache-first for hashed `/assets/`, everything else straight to network — Supabase must never be cached). Registered in `main.tsx` **only under `import.meta.env.PROD`**; a worker in dev fights Vite HMR. Icons are generated by `node scripts/make-icons.mjs` — a dependency-free PNG encoder (zlib + hand-rolled CRC) that draws three globs and a tether. Edit the script, never the PNGs. **`scripts/how-to-make-iOS-icon.md` is the full guide** (swapping in custom art, the iOS art rules, and the two caches that hide a changed icon), and it covers the sibling repos too. ⚠️ `sw.js` serves `.png`/`.webmanifest` **cache-first**, so changing an icon without bumping `CACHE` (`adhdo-v1`) leaves every installed device on the old art forever. The `?capture=1` home-screen shortcut just opens the app — the capture bar is already there.
 - **⚠️ Installed on iOS, every height unit lies — `dvh` included (fixed 2026-09-20; the 2026-09-17 attempt did not work).** In a home-screen web app with `black-translucent` + `viewport-fit=cover`, WebKit lays the page out from y=0 — correctly full-bleed under the Dynamic Island — but sizes the **initial containing block from the unobscured content rect: screen MINUS the status bar**. `height: 100%`, `100vh` and **`100dvh` all resolve against it**, so they are all `safe-area-inset-top` (59px on a 15 Pro) short, and a shell that can't scroll has no content flow to push past it. The first fix reached for `dvh` and, believing `position: fixed` obeyed the same short box, added `.mobile-root { transform: translateZ(0) }` to re-anchor the phone's fixed chrome to the app box. Both premises were wrong, and the second one made it worse: the tab bar had been landing on the real screen edge and the transform dragged it 59px up, leaving body's `--bg` showing beneath it (Nic's screenshot, 2026-09-20 — the tab bar's bottom measured exactly 177 device px = 59pt above the screen edge on a 15 Pro).
   - **The fix: `position: fixed` measures the real window, so the shell is a fixed box.** `#root { position: fixed; inset: 0 }`, and `.app` / `.mobile-app` take 100% of *that*. No dvh, no JS measurement, no per-element arithmetic. Sibling repo `traction` is the proof the ICB and the fixed-positioning viewport disagree: same phone, same install mode, identical head tags, and its tab bar is a plain `position: fixed; bottom: 0` that lands flush.
-  - ⚠️ **Never put a `transform` / `filter` / `perspective` / `will-change` on `#root`, `.app` or `.mobile-root` unconditionally.** Any of them makes that element the containing block for its fixed descendants (tab bar, FAB stack, sheets, bulk bar, undo pill, home/auth buttons). The one sanctioned exception is under `.ios-short-viewport`, below, where the app box has been measured first.
+  - ⚠️ **Never put a `transform` / `filter` / `perspective` / `will-change` on `#root`, `.app` or `.mobile-root` unconditionally.** Any of them makes that element the containing block for its fixed descendants (capture bar, sheets, bulk bar, undo pill, home/auth buttons). The one sanctioned exception is under `.ios-short-viewport`, below, where the app box has been measured first.
   - **Round three (2026-09-20, same evening): `#root { position: fixed }` moved the screenshot by zero pixels** — the tab bar's bottom measured 2378 of 2556 both before and after. Two things came out of looking again:
     1. **`user-scalable=no` was the only head-tag difference from traction**, and it is gone. traction does not have this bug on the same phone in the same install mode; its viewport meta is now character-for-character adhdo's. A non-scalable viewport is exactly the case where WebKit has reason to lay out against the unobscured content rect rather than the window, and Safari has ignored the token for pinch-zoom since iOS 10, so it was buying nothing. **This is a hypothesis that fits every measurement, not a proven cause** — which is the point of (2).
     2. **`src/iosViewport.ts` stops the guessing: it measures the shortfall on the device.** `shortfallPx()` compares `document.documentElement.clientHeight` against `screen`'s long/short side and publishes the difference as `--ios-shortfall` + `.ios-short-viewport` on `<html>`; index.css then adds exactly that much back to `#root` and — only then — makes `.mobile-root` the containing block, because in that state `bottom: 0` against the viewport is short too. **It is inert when there is nothing to correct** (measures 0, class never lands), so it costs nothing on desktop, Android, Safari, or a future WebKit that stops doing this.
@@ -122,7 +170,7 @@ mapped 1:1 onto the shared state so desktop and phone are two windows on one gal
       - This is also the likeliest reason sibling repo `traction` never showed the bug despite carrying `black-translucent` since its own first PWA commit: not a difference in either repo's HTML, but in when each icon was installed. ⚠️ **Three rounds were spent treating traction as proof that a CSS shape worked.** It was evidence about install state, not about CSS. A sibling app that "doesn't have the bug" is only a control if it was installed under the same tags.
     - **`.ios-short-viewport` and `--ios-shortfall` still exist but nothing in index.css reads them.** They feed the diagnostics panel only. `scripts/smoke.mjs` asserts the class moves no geometry, so nobody wires it back up to a layout rule.
   - **Six rounds is the lesson, and it is not "measure harder": instrument the device before theorising.** Five rounds of CSS argued from screenshots; one screenshot of a panel printing `screen` next to `innerHeight` ended it in a minute. When a bug lives somewhere the dev machine cannot reproduce, **build the readout first** — it is cheaper than the second wrong fix, let alone the fifth. Measuring the screenshot (`PIL`, count pixels up from the bottom, divide by the device scale) is still how to check a claim, but it only ever showed the symptom; the numbers showed the cause.
-- **Safe areas.** `--safe-t/b/l/r` vars in `:root`; `index.html` has `viewport-fit=cover` + `apple-mobile-web-app-status-bar-style=black` (⚠️ **not** `black-translucent` — see round six above; changing it back reintroduces a gap no CSS can close). Every fixed edge (tab bar, FAB stack, bulk bar, sheets, undo pill) pays them back.
+- **Safe areas.** `--safe-t/b/l/r` vars in `:root`; `index.html` has `viewport-fit=cover` + `apple-mobile-web-app-status-bar-style=black` (⚠️ **not** `black-translucent` — see round six above; changing it back reintroduces a gap no CSS can close). Every fixed edge (capture bar, bulk bar, sheets, undo pill) pays them back.
 
 ## Sync (rewritten 2026-08-22, again 2026-09-17 — both times it was losing data)
 
@@ -241,7 +289,7 @@ itself, every way the function must refuse to act (Safari's chrome is not a shor
 gap bigger than the status bar, a viewport taller than the screen, no inset, unreadable
 metrics), both orientations, desktop inertness, and a device matrix — nothing in the function is tuned to the phone the bug was found on, so the 16 Pro Max reclaims its own 62px and the SE its own 20px rather than a copied 59, an iPad in Split View (which does not own the screen) is left alone, and Android, a plain browser tab and a future iOS that stops doing this all get zero.
 
-`node scripts/smoke.mjs` — 84 end-to-end assertions across both layouts: Today/Upcoming/Browse tabs, tab badge, quick-add NL parsing ("tomorrow p1" lifts out), checkbox + swipe-right complete, swipe-left schedule, scroll-doesn't-swipe, detail-sheet priority, project drill-in + Completed fold, long-press select, bulk move, single-undo-per-batch, search/filters, state repair, add-project, an Inbox to-do staying in the Inbox, the iOS shell geometry (`#root` fixed, no transform on `.app`/`.mobile-root`, app box and tab bar flush with the window bottom, the measured correction inert by default and still flush when forced on, a clip-free shell chain, all four tab labels inside the window) — then desktop: galaxy intact, due chips on rows and globs, priority-tinted todo-checks, the context-menu Schedule popover writing state, and the agenda dock (badge count, overdue/today split, a context-menu-scheduled task appearing in it, undated thoughts staying out, surviving a galaxy click, tick-to-complete, click-to-fly, Esc to close), the right-click glob/cluster picker (cluster lands in rename mode), Make todo wrapping a free glob in a one-member cluster, cluster ✕ release|destroy with a single-step undo, click-to-expand on a collapsed cluster, the diagnostics panel (Browse row, its build stamp, the readings the iOS fix turns on, Esc to close), and the backups panel from both layouts (Browse row on mobile, `?` → version history on desktop, Esc to close) with an import proving it merges rather than replaces. Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`, or set `BROWSER_PATH=/path/to/chromium` (works for group-drag-check too). Both scripts need the dev server up, which needs Supabase env vars — a dummy `.env.local` (any URL/key) is enough for local runs.
+`node scripts/smoke.mjs` — 100 end-to-end assertions across both layouts: the capture pocket (three pages and no Todoist chrome, pinned Due with no duplicate in the stream, a never-empty stream with day headers, Enter-to-catch keeping focus + the "caught" flash, live date chips that can be refused, the input not moving when a chip appears, priority tokens left alone, the sort nudge filing/skipping, swipe-right done / swipe-left file, scroll-doesn't-swipe, the detail sheet with its caught-at line and date picker, an Unsorted to-do staying Unsorted, long-press select → File → New cluster with a one-tap undo from the capture bar, the Clusters grid, capturing into an open cluster, the Done fold, Search's own box and Dated sort, backups + diagnostics from the Clusters page with an import that merges), the iOS shell geometry (`#root` fixed, no transform on `.app`/`.mobile-root`, app box and capture bar flush with the window bottom, the shortfall marker inert, a clip-free shell chain) — then desktop: galaxy intact, due chips on rows and globs, priority-tinted todo-checks, the context-menu Schedule popover writing state, and the agenda dock (badge count, overdue/today split, a context-menu-scheduled task appearing in it, undated thoughts staying out, surviving a galaxy click, tick-to-complete, click-to-fly, Esc to close), the right-click glob/cluster picker (cluster lands in rename mode), Make todo wrapping a free glob in a one-member cluster, cluster ✕ release|destroy with a single-step undo, click-to-expand on a collapsed cluster, and the backups panel from desktop (`?` → version history, Esc to close). Needs `npm i --no-save playwright-core`; drives installed Edge via `channel: 'msedge'`, or set `BROWSER_PATH=/path/to/chromium` (works for group-drag-check too). Both scripts need the dev server up, which needs Supabase env vars — a dummy `.env.local` (any URL/key) is enough for local runs.
 
 Two gotchas when writing harnesses for this app:
 1. **Seed localStorage with `context.addInitScript`, never "goto → set → reload".** adhdo saves on `beforeunload`, so the reload writes the empty state it booted with straight over your seed.
@@ -259,4 +307,27 @@ Two gotchas when writing harnesses for this app:
 - Auto-cluster orphan globs (~1 week old) into gentle "lost thoughts" cluster
 - Search/filter on **desktop** beyond Cmd+K (mobile now has search + filter chips); keyboard shortcuts. (Export/import is **done** — see Backups above.)
 - **Hyper-clusters** (deferred — own session): nested clusters-of-clusters with collapsible per-source headers, draggable back out to restore originals. Today's hold-to-merge uses simple absorb (target wins). Would need a new data shape (parentClusterId on Cluster, or a HyperCluster type), nested render/drag/persistence migration.
-- **Galaxies: one hierarchy level above clusters** (Nic's ask, 2026-09-16 — deferred to its own session, overlaps with hyper-clusters above). Hierarchy becomes galaxies ≫ clusters ≫ globs; a Todoist analogy would be workspaces/folders ≫ projects ≫ tasks. Nic also floated going deeper — universe ≫ galaxy ≫ solar system ≫ planet ≫ biome — so if this gets built, design the data shape as arbitrary-depth nesting (a `parentId` on a generalized container type) rather than hard-coding one extra level, and let the UI decide how many levels to expose. Mobile Browse is naturally ready for it (folders above projects); desktop needs a zoom/level metaphor (the cluster browser or useClusterFocus zoom could become "enter a galaxy").
+- **Galaxies: one hierarchy level above clusters** (Nic's ask, 2026-09-16 — deferred to its own session, overlaps with hyper-clusters above). Hierarchy becomes galaxies ≫ clusters ≫ globs; a Todoist analogy would be workspaces/folders ≫ projects ≫ tasks. Nic also floated going deeper — universe ≫ galaxy ≫ solar system ≫ planet ≫ biome — so if this gets built, design the data shape as arbitrary-depth nesting (a `parentId` on a generalized container type) rather than hard-coding one extra level, and let the UI decide how many levels to expose. The phone's Clusters grid is naturally ready for it (a card per galaxy, drill in); desktop needs a zoom/level metaphor (the cluster browser or useClusterFocus zoom could become "enter a galaxy").
+
+
+## How to end your messages — the "For Nic" block (org-wide rule)
+
+Nic has severe ADHD and loses mid-run asides ("by the way...", "one thing to check
+before you...") and anything buried in closing prose. **This is not a request to be
+less detailed** — keep the full explanation, reasoning and tradeoffs. Just always end
+the turn with a landing pad, as the LAST thing in the message:
+
+```
+---
+**For Nic:**
+1. <verb-first action> — <why, one short clause>
+2. ❓ <decision only Nic can make> — <option A vs option B>
+3. ⏸️ <parked / needs its own session>
+```
+
+- Every "by the way" you had this turn lands here, or assume he never read it.
+- Numbered not bulleted; verb first; max 5, most important first.
+- No recap of what you already did — that's the body's job. This is Nic's list.
+- Nothing for him? Still write it: `**For Nic:** Nothing — all clear.`
+
+Full spec lives in the universal `~/.claude/CLAUDE.md` (and `Code/CLAUDE.md`).

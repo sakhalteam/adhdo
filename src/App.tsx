@@ -1124,10 +1124,8 @@ export default function App() {
           state={state}
           onboardingActive={onboardingActive}
           voice={voice}
-          onAdd={addGlob}
           onAddTask={addTask}
           onSetDueDate={setGlobDueDate}
-          onSetPriority={setGlobPriority}
           onAddCluster={addCluster}
           onRecolorCluster={recolorCluster}
           onToggleDone={toggleDone}
@@ -1135,8 +1133,6 @@ export default function App() {
           onToggleFlag={toggleFlag}
           onUpdateText={updateGlobText}
           onDelete={deleteGlob}
-          onAddToCluster={addToCluster}
-          onMoveGlobToCluster={moveGlobToCluster}
           onRemoveFromCluster={removeFromCluster}
           onRenameCluster={renameCluster}
           onToggleAllTodosInCluster={toggleAllTodosInCluster}
@@ -1144,6 +1140,7 @@ export default function App() {
           onDissolveCluster={dissolveCluster}
           onDeleteCluster={deleteCluster}
           onMoveGlobsToCluster={moveGlobsToCluster}
+          onTransferToNewCluster={transferToNewCluster}
           onToggleFlagGlobs={toggleFlagGlobs}
           onToggleAllTodosInGlobs={toggleAllTodosInGlobs}
           onDeleteGlobs={deleteGlobs}

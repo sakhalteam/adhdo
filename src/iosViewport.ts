@@ -168,11 +168,14 @@ export function viewportReadings(win: Window = window): ViewportReading[] {
         `${css(root, 'overflow')} / ${css(doc.body, 'overflow')} / ${css(doc.getElementById('root'), 'overflow')}` },
     { label: '#root rect', value: rect('#root') },
     { label: '.mobile-app rect', value: rect('.mobile-app') },
-    { label: '.mobile-tabbar rect', value: rect('.mobile-tabbar') },
-    { label: 'lowest tab label', value: (() => {
-      const labels = [...doc.querySelectorAll('.mobile-tab-label')]
-      if (!labels.length) return 'none rendered'
-      return `${Math.round(Math.max(...labels.map(l => l.getBoundingClientRect().bottom)))} of ${win.innerHeight}`
+    // The capture bar is the phone's bottom-most chrome (the tab bar it replaced
+    // on 2026-09-25 was what first showed the clipping), so it is the canary: if
+    // its bottom isn't the window's bottom, the shell is short again.
+    { label: '.mobile-capture rect', value: rect('.mobile-capture') },
+    { label: 'capture bar bottom', value: (() => {
+      const bar = doc.querySelector('.mobile-capture')
+      if (!bar) return 'none rendered'
+      return `${Math.round(bar.getBoundingClientRect().bottom)} of ${win.innerHeight}`
     })() },
   ]
 }

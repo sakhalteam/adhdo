@@ -1925,11 +1925,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* ── mobile (Todoist-shaped task app) ─────────────────────
+/* ── mobile: the capture pocket ─────────────────────────────
  * Rendered instead of the galaxy on phones (see useIsMobile + App.tsx).
- * Structure is Todoist's — bottom tabs, project drill-ins, quick-add FAB —
- * wearing adhdo's galaxy skin. Mobile modifiers stay prefixed `is-` and no
- * mobile element ever reuses a bare galaxy class name (see CLAUDE.md). */
+ * One job — catch a thought in under five seconds — so the capture bar is
+ * always on screen at the bottom, and everything else (Thoughts / Clusters /
+ * Search) is a quiet segmented control up top. Mobile modifiers stay prefixed
+ * `is-`, and no mobile element ever reuses a bare galaxy class (see CLAUDE.md).
+ * ⚠️ The bar, bulk bar, sheets and undo pill are `position: fixed` to the
+ * WINDOW — see the iOS notes further down before touching the shell. */
 .mobile-app {
   position: absolute;
   inset: 0;
@@ -1948,6 +1951,7 @@ body {
   pointer-events: none;
 }
 
+/* ── header: three pages, one pill ── */
 .mobile-head {
   position: relative;
   z-index: 1;
@@ -1955,7 +1959,50 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 14px 12px 8px;
+  /* the sides clear the icon-only home + account buttons floating there */
+  padding: calc(10px + var(--safe-t)) 56px 8px;
+}
+.mobile-nav {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  max-width: 300px;
+  padding: 3px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+}
+.mobile-nav-btn {
+  flex: 1;
+  min-height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.mobile-nav-btn.on {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), #4f46e5);
+  box-shadow: 0 0 16px -4px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.mobile-nav-label { white-space: nowrap; }
+
+/* Icon-only on the phone: the header row belongs to the page pill. */
+.mobile-root .home-btn,
+.mobile-root .auth-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+  font-size: 0;
 }
 
 .mobile-list {
@@ -1964,31 +2011,12 @@ body {
   flex: 1 1 auto;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 0 12px;
+  padding: 4px 12px 0;
 }
-/* clears the tab bar + FAB */
-.mobile-list-pad { height: calc(140px + var(--safe-b)); }
+/* clears the capture bar, including its chip row */
+.mobile-list-pad { height: calc(112px + var(--safe-b)); }
 
-/* ── per-tab large title, Todoist style ── */
-.mobile-view-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  /* buys back the fixed home/auth chrome floating over the scroller's top */
-  padding: calc(46px + var(--safe-t)) 4px 10px;
-}
-.mobile-big-title {
-  font-size: 24px;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  background: linear-gradient(90deg, var(--text), var(--accent-glow));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.mobile-view-sub { font-size: 12px; color: var(--muted); font-weight: 600; }
-
-/* ── section groups (Overdue / Today / per-date / My Projects) ── */
+/* ── sections ── */
 .mobile-group { margin-bottom: 14px; }
 .mobile-group-head {
   display: flex;
@@ -2001,8 +2029,7 @@ body {
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;
 }
-.mobile-group-head.is-overdue { color: var(--p1); }
-.mobile-group-date { font-size: 11px; font-weight: 500; color: var(--muted); }
+.mobile-group-head.is-due { color: var(--p2); }
 .mobile-group-count {
   margin-left: auto;
   flex: 0 0 auto;
@@ -2013,10 +2040,25 @@ body {
   border-radius: 99px;
   padding: 2px 8px;
 }
+/* The stream reads like a journal: each day's header sticks while you scroll it. */
+.mobile-day-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 4px 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  /* only readable once rows slide under it; faint enough to vanish at rest */
+  background: linear-gradient(rgba(10, 10, 26, 0.6), rgba(10, 10, 26, 0));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
 
-.mobile-empty,
-.mobile-clear-state {
-  margin-top: 10vh;
+.mobile-empty {
+  margin-top: 14vh;
   text-align: center;
   padding: 0 24px;
   animation: fadeIn 0.4s ease;
@@ -2024,8 +2066,6 @@ body {
 .mobile-empty-emoji { font-size: 44px; margin-bottom: 10px; }
 .mobile-empty-title { font-size: 18px; font-weight: 600; color: var(--text); }
 .mobile-empty-sub { font-size: 14px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
-.mobile-clear-state { margin-top: 6vh; }
-
 .mobile-no-results {
   text-align: center;
   color: var(--muted);
@@ -2033,15 +2073,43 @@ body {
   padding: 18px 12px;
 }
 
-/* ── task rows ── */
+/* ── the nudge: invited, never required ── */
+.mobile-nudge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 2px 0 14px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 35%, transparent);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 22%, transparent),
+    color-mix(in srgb, #06b6d4 12%, transparent));
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-nudge:active { filter: brightness(1.2); }
+.mobile-nudge-ico { font-size: 18px; display: inline-block; animation: nudgeSpin 7s linear infinite; }
+@keyframes nudgeSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mobile-nudge-ico { animation: none; } }
+.mobile-nudge-text { flex: 1 1 auto; min-width: 0; }
+.mobile-nudge-text b { font-weight: 700; }
+.mobile-nudge .mobile-chevron { color: var(--accent-bright); }
+
+/* ── thought rows ── */
 .mobile-task-wrap {
   position: relative;
   margin: 4px 0;
   border-radius: 12px;
   overflow: hidden;
 }
-/* Swipe reveals: right = complete (green, left edge), left = schedule (violet,
-   right edge). Hidden at rest so an indented row can't leak a colored sliver. */
+/* Swipe reveals: right = done (green, left edge), left = file (violet, right
+   edge). Hidden at rest so a row can't leak a colored sliver. */
 .mobile-task-under {
   position: absolute;
   inset: 0;
@@ -2055,7 +2123,7 @@ body {
   transition: opacity 0.12s, filter 0.12s;
 }
 .mobile-task-under.complete { justify-content: flex-start; padding-left: 20px; background: var(--success); }
-.mobile-task-under.schedule { justify-content: flex-end; padding-right: 20px; background: var(--accent); }
+.mobile-task-under.file { justify-content: flex-end; padding-right: 20px; background: var(--accent); }
 .mobile-task-wrap.swiping .mobile-task-under { opacity: 1; }
 .mobile-task-under.armed { filter: brightness(1.25); }
 
@@ -2078,7 +2146,6 @@ body {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
   border-color: color-mix(in srgb, var(--accent-bright) 60%, transparent);
 }
-
 .mobile-task-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -2115,7 +2182,7 @@ body {
   text-overflow: ellipsis;
 }
 
-/* the round Todoist checkbox — priority colors the ring */
+/* the round checkbox — a desktop-set priority tints the ring */
 .mobile-check {
   flex: 0 0 auto;
   width: 22px;
@@ -2164,53 +2231,103 @@ body {
 }
 .mobile-menu-btn:active { background: rgba(255, 255, 255, 0.06); }
 
-/* ── Browse tab ── */
-.mobile-browse-row {
+.mobile-cluster-dot {
+  flex: 0 0 auto;
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.mobile-cluster-dot.big { width: 12px; height: 12px; }
+
+/* ── Clusters page: every cluster as a little glowing card ── */
+.mobile-cluster-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 4px;
+  margin-bottom: 18px;
+}
+.mobile-cluster-card {
+  --cluster-color: var(--accent-bright);
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 46px;
-  margin: 4px 0;
-  padding: 8px 11px;
-  background: var(--bg-elev-solid);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 92px;
+  padding: 12px 12px 11px;
+  text-align: left;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--cluster-color) 40%, transparent);
+  background:
+    radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--cluster-color) 22%, transparent), transparent 70%),
+    var(--bg-elev-solid);
+  box-shadow: 0 0 22px -10px color-mix(in srgb, var(--cluster-color) 70%, transparent);
   color: var(--text);
   font-family: inherit;
-  font-size: 14px;
   cursor: pointer;
-  text-align: left;
+  overflow: hidden;
   -webkit-tap-highlight-color: transparent;
+  transition: transform 0.12s ease;
 }
-.mobile-browse-row:active { background: rgba(255, 255, 255, 0.08); }
-.mobile-browse-row.is-add { color: var(--accent-bright); background: transparent; border-style: dashed; }
-.mobile-browse-ico { flex: 0 0 auto; width: 22px; text-align: center; }
-.mobile-browse-name {
-  flex: 1 1 auto;
-  min-width: 0;
+.mobile-cluster-card:active { transform: scale(0.98); }
+.mobile-cluster-card.is-unsorted { grid-column: 1 / -1; min-height: 0; --cluster-color: #94a3b8; }
+.mobile-cluster-card.is-add {
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  background: transparent;
+  box-shadow: none;
+  color: var(--accent-bright);
+}
+.mobile-cluster-card-name {
+  max-width: 100%;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mobile-cluster-card-meta { font-size: 11px; font-weight: 600; color: var(--muted); }
+.mobile-cluster-card-peek {
+  max-width: 100%;
+  margin-top: auto;
+  padding-top: 4px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 70%, transparent);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.mobile-browse-count { flex: 0 0 auto; font-size: 12px; color: var(--muted); }
-.mobile-browse-row .mobile-chevron { color: var(--muted); }
 
-.mobile-proj-dot {
-  flex: 0 0 auto;
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-}
-.mobile-proj-dot.big { width: 12px; height: 12px; }
-
-/* ── project drill-in ── */
-.mobile-proj-head {
+.mobile-group.is-quiet { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+.mobile-quiet-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: calc(46px + var(--safe-t)) 0 10px;
+  width: 100%;
+  padding: 10px 6px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-quiet-row .mobile-chevron { margin-left: auto; }
+
+/* ── one cluster (or Unsorted), opened ── */
+.mobile-view-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0 10px;
 }
 .mobile-back-btn {
   flex: 0 0 auto;
@@ -2226,7 +2343,7 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.mobile-proj-title {
+.mobile-view-title {
   flex: 1 1 auto;
   min-width: 0;
   font-size: 18px;
@@ -2235,34 +2352,20 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.mobile-addtask-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 40px;
-  padding: 6px 11px;
-  background: transparent;
+.mobile-head-link {
+  flex: 0 0 auto;
+  padding: 6px 10px;
   border: none;
-  color: var(--muted);
+  border-radius: 8px;
+  background: none;
+  color: var(--accent-bright);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
-  text-align: left;
   -webkit-tap-highlight-color: transparent;
 }
-.mobile-addtask-plus {
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  color: var(--accent-bright);
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  font-size: 15px;
-}
-.mobile-addtask-row:active .mobile-addtask-plus { background: var(--accent); color: #fff; }
+.mobile-head-link:active { background: rgba(255, 255, 255, 0.06); }
 .mobile-completed-toggle {
   display: flex;
   align-items: center;
@@ -2283,187 +2386,237 @@ body {
 .mobile-chevron { flex: 0 0 auto; transition: transform 0.2s; }
 .mobile-chevron.open { transform: rotate(90deg); }
 
-/* ── bottom tab bar ── */
-.mobile-tabbar {
+/* ── the capture bar: always there, always under the thumb ── */
+.mobile-capture {
   position: fixed;
-  left: 0; right: 0; bottom: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 55;
-  display: flex;
-  padding: 6px max(8px, var(--safe-l)) calc(6px + var(--safe-b)) max(8px, var(--safe-r));
+  padding: 8px max(12px, var(--safe-l)) calc(10px + var(--safe-b)) max(12px, var(--safe-r));
   background: rgba(13, 13, 28, 0.92);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--border);
 }
-.mobile-tab {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  min-height: 46px;
-  padding-top: 4px;
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-family: inherit;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-.mobile-tab.on { color: var(--accent-bright); }
-.mobile-tab-ico { position: relative; display: flex; }
-.mobile-tab-label { font-size: 10px; font-weight: 600; letter-spacing: 0.02em; }
-.mobile-tab-badge {
-  position: absolute;
-  top: -5px;
-  right: -11px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 99px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ── FAB stack (mic + quick add) ── */
-.mobile-fab-stack {
-  position: fixed;
-  right: calc(16px + var(--safe-r));
-  bottom: calc(72px + var(--safe-b));
-  z-index: 56;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-.mobile-fab {
-  width: 50px;
-  height: 50px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 16px;
-  border: none;
-  background: linear-gradient(135deg, var(--accent), #4f46e5);
-  color: #fff;
-  cursor: pointer;
-  box-shadow:
-    0 0 24px color-mix(in srgb, var(--accent) 50%, transparent),
-    0 10px 26px rgba(0, 0, 0, 0.5);
-  -webkit-tap-highlight-color: transparent;
-  transition: transform 0.12s ease;
-}
-.mobile-fab svg { width: 23px; height: 23px; }
-.mobile-fab:active { transform: scale(0.93); }
-/* the mic rides above the FAB; its base style is absolute inside a capture bar */
-.mobile-fab-stack .capture-mic {
-  position: static;
-  transform: none;
-  width: 40px;
-  height: 40px;
-  background: rgba(19, 19, 37, 0.92);
-  border-color: var(--border-bright);
-}
-.mobile-fab-stack .capture-mic:active { transform: scale(0.93); }
-.mobile-fab-stack .capture-mic.on { background: var(--danger); border-color: var(--danger); }
-
-/* ── quick add sheet ── */
-.mobile-qa-input {
-  width: 100%;
-  font-family: inherit;
-  font-size: 16px; /* under 16px and iOS zooms the page on focus */
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--border-bright);
-  border-radius: 12px;
-  padding: 13px 14px;
-  outline: none;
-  margin: 2px 0 10px;
-}
-.mobile-qa-input:focus { border-color: color-mix(in srgb, var(--accent-bright) 60%, transparent); }
-.mobile-qa-chips {
+/* The status strip: cluster target, date chip, "caught" flash — and undo,
+   docked at the right end. Fixed height, so nothing shifts while you type. */
+.mobile-capture-chips {
   display: flex;
   align-items: center;
   gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  padding-bottom: 2px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 72px 7px 2px;
 }
-.mobile-qa-chips::-webkit-scrollbar { display: none; }
-.mobile-qa-chip {
-  flex: 0 0 auto;
+.mobile-capture-target,
+.mobile-capture-date,
+.mobile-capture-flash {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 0 12px;
+  gap: 5px;
+  min-height: 26px;
+  max-width: 60%;
+  padding: 0 10px;
   border-radius: 99px;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--muted);
   font-family: inherit;
-  font-size: 13px;
-  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mobile-capture-target {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+}
+.mobile-capture-date {
+  color: var(--accent-glow);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 45%, transparent);
+  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.mobile-qa-chip.set {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent-bright) 55%, transparent);
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+.mobile-capture-date span { opacity: 0.7; margin-left: 2px; }
+.mobile-capture-flash {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
+  animation: fadeIn 0.12s ease;
 }
-.mobile-qa-chip.prio.p1.set { color: var(--p1); border-color: color-mix(in srgb, var(--p1) 55%, transparent); background: color-mix(in srgb, var(--p1) 14%, transparent); }
-.mobile-qa-chip.prio.p2.set { color: var(--p2); border-color: color-mix(in srgb, var(--p2) 55%, transparent); background: color-mix(in srgb, var(--p2) 14%, transparent); }
-.mobile-qa-chip.prio.p3.set { color: var(--p3); border-color: color-mix(in srgb, var(--p3) 55%, transparent); background: color-mix(in srgb, var(--p3) 14%, transparent); }
-.mobile-qa-send {
+.mobile-capture-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mobile-capture-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 16px;
+  border-radius: 99px;
+  border: 1px solid var(--border-bright);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 16px; /* under 16px and iOS zooms the page on focus */
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.mobile-capture-input::placeholder { color: var(--muted); }
+.mobile-capture-input:focus {
+  border-color: color-mix(in srgb, var(--accent-bright) 65%, transparent);
+  box-shadow: 0 0 0 3px var(--ring), 0 0 24px -8px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+/* the shared mic is absolutely positioned inside the desktop bar; here it flows */
+.mobile-capture .capture-mic {
+  position: static;
+  transform: none;
   flex: 0 0 auto;
-  margin-left: auto;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
+}
+.mobile-capture .capture-mic:active { transform: scale(0.94); }
+.mobile-capture-send {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   border: none;
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), #4f46e5);
   color: #fff;
   cursor: pointer;
+  box-shadow: 0 0 18px -4px color-mix(in srgb, var(--accent) 70%, transparent);
   -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s, transform 0.12s;
 }
-.mobile-qa-send:disabled { opacity: 0.35; }
-.mobile-qa-picker {
+.mobile-capture-send:active { transform: scale(0.93); }
+.mobile-capture-send:disabled { opacity: 0.35; box-shadow: none; }
+
+/* ── sort a few: one thought at a time ── */
+.mobile-sort-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 4px;
+}
+.mobile-sort-progress {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mobile-sort-text {
+  max-height: 28vh;
+  overflow-y: auto;
+  padding: 6px 4px 2px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  word-break: break-word;
+}
+.mobile-sort-when { padding: 0 4px 14px; font-size: 12px; color: var(--muted); }
+.mobile-sort-label {
+  padding: 0 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mobile-sort-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 0 10px;
-  animation: fadeIn 0.12s ease;
+  gap: 8px;
+  max-height: 32vh;
+  overflow-y: auto;
+  padding: 0 2px 14px;
 }
-.mobile-qa-opt {
+.mobile-sort-chip {
+  --cluster-color: var(--accent-bright);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.05);
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 99px;
+  border: 1px solid color-mix(in srgb, var(--cluster-color) 45%, transparent);
+  background: color-mix(in srgb, var(--cluster-color) 14%, transparent);
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.mobile-qa-opt.on { border-color: var(--accent-bright); background: color-mix(in srgb, var(--accent) 24%, transparent); }
-.mobile-qa-opt.prio.p1 { color: var(--p1); }
-.mobile-qa-opt.prio.p2 { color: var(--p2); }
-.mobile-qa-opt.prio.p3 { color: var(--p3); }
+.mobile-sort-chip:active { background: color-mix(in srgb, var(--cluster-color) 32%, transparent); }
+.mobile-sort-chip.is-new { border-style: dashed; background: transparent; color: var(--accent-bright); }
+.mobile-sort-new {
+  flex: 1 1 160px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 99px;
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 60%, transparent);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 16px;
+  outline: none;
+}
+.mobile-sort-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.mobile-sort-act {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--border-bright);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-sort-act.is-danger {
+  color: #fecaca;
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.mobile-sort-act.is-skip {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  border-color: var(--accent-bright);
+}
+.mobile-sort-finished { padding: 14px 12px 6px; text-align: center; }
+.mobile-sort-finished .mobile-prompt-btn { width: 100%; margin-top: 16px; }
 
+/* ── pickers and prompts ── */
+.mobile-prompt-input {
+  width: 100%;
+  margin: 2px 0 10px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-bright);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 16px; /* under 16px and iOS zooms the page on focus */
+  outline: none;
+}
+.mobile-prompt-input:focus { border-color: color-mix(in srgb, var(--accent-bright) 60%, transparent); }
 .mobile-date-input {
   font: inherit;
   font-size: 13px;
@@ -2476,6 +2629,7 @@ body {
   color-scheme: dark;
 }
 .mobile-sheet-row .mobile-date-input { margin-left: auto; }
+.mobile-detail-when { padding: 0 4px 10px 38px; font-size: 12px; color: var(--muted); }
 
 /* ── task detail sheet ── */
 .mobile-detail-top {
@@ -2528,27 +2682,6 @@ body {
 .mobile-detail-value.due-tomorrow { color: var(--p2); }
 .mobile-detail-value.due-soon { color: var(--accent-bright); }
 .mobile-detail-row .mobile-chevron { color: var(--muted); }
-.mobile-prio-picker { display: flex; gap: 6px; margin-left: auto; }
-.mobile-prio-btn {
-  width: 38px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9px;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-.mobile-prio-btn.p1 { color: var(--p1); }
-.mobile-prio-btn.p2 { color: var(--p2); }
-.mobile-prio-btn.p3 { color: var(--p3); }
-.mobile-prio-btn.on { border-color: currentColor; background: color-mix(in srgb, currentColor 14%, transparent); }
 
 /* ── project color + text prompt sheets ── */
 .mobile-swatch-grid {
@@ -2646,12 +2779,25 @@ body {
   font-weight: 600;
 }
 
-/* reposition the fixed chrome so it doesn't fight the tab bar / FAB */
+/* Undo docks in the capture bar's status strip (right end) instead of floating
+   over the list, where it sat on top of whatever row was down there.
+   63px = the bar's bottom padding (10) + input row (46) + strip gap (7). */
 .mobile-root .undo-redo-bar {
   top: auto;
-  left: 12px;
-  bottom: calc(76px + var(--safe-b));
+  left: auto;
+  right: max(12px, var(--safe-r));
+  bottom: calc(63px + var(--safe-b));
   z-index: 60;
+}
+.mobile-root .undo-redo-btn { width: 30px; height: 30px; }
+/* "caught" in the strip already says a thought landed; the 2s-later local
+   "saved" was a second, vaguer echo that landed on the page pill. The cloud
+   status still matters, so it drops below the header instead. */
+.mobile-root .save-indicator { display: none; }
+.mobile-root .cloud-indicator {
+  top: calc(54px + var(--safe-t));
+  right: 50%;
+  transform: translateX(50%);
 }
 .mobile-root .auth-btn { right: 12px; }
 
@@ -2723,9 +2869,9 @@ body {
 
 /* Standalone has no browser chrome above it — without this the title sits
    underneath the clock and the carrier bars. */
-.mobile-root .home-btn { top: calc(12px + var(--safe-t)); left: calc(12px + var(--safe-l)); }
-.mobile-root .auth-btn { top: calc(12px + var(--safe-t)); right: calc(12px + var(--safe-r)); }
-.mobile-head { padding-top: calc(14px + var(--safe-t)); }
+/* level with the page pill (the header's own padding-top pays safe-t back) */
+.mobile-root .home-btn { top: calc(8px + var(--safe-t)); left: calc(12px + var(--safe-l)); }
+.mobile-root .auth-btn { top: calc(8px + var(--safe-t)); right: calc(12px + var(--safe-r)); }
 
 /* Select mode owns the header row, so the floating chrome would collide with
    its Cancel / All buttons. */
